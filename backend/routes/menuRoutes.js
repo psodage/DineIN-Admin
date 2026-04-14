@@ -4,6 +4,44 @@ const { resolveEnglishMarathiPair } = require("../utils/translateEnToMr");
 
 const router = express.Router();
 
+const normalizeOptionKey = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const buildOptionPayload = (body) => {
+  const pollOptionKey = normalizeOptionKey(body?.pollOptionKey);
+  if (!pollOptionKey) {
+    return {
+      pollOptionKey: "",
+      pollOptionLabel: "",
+      pollOptionLabelMr: "",
+    };
+  }
+  return {
+    pollOptionKey,
+    pollOptionLabel: String(body?.pollOptionLabel || "").trim(),
+    pollOptionLabelMr: String(body?.pollOptionLabelMr || "").trim(),
+  };
+};
+
+const buildOptionConflictQuery = (dayRange, optionKey) => {
+  const dateQuery = {
+    date: { $gte: dayRange.startOfDay, $lt: dayRange.endOfDay },
+  };
+  if (optionKey) {
+    return { ...dateQuery, pollOptionKey: optionKey };
+  }
+  return {
+    ...dateQuery,
+    $or: [
+      { pollOptionKey: { $exists: false } },
+      { pollOptionKey: "" },
+      { pollOptionKey: null },
+    ],
+  };
+};
+
 // GET /api/menu - Fetch all menus
 router.get("/", async (req, res) => {
   try {
@@ -30,12 +68,18 @@ router.post("/", async (req, res) => {
     const startOfDay = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
     const endOfDay = new Date(startOfDay);
     endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
-    const existingMenu = await Menu.findOne({
-      date: { $gte: startOfDay, $lt: endOfDay },
-    });
+    const optionPayload = buildOptionPayload(req.body);
+    const existingMenu = await Menu.findOne(
+      buildOptionConflictQuery(
+        { startOfDay, endOfDay },
+        optionPayload.pollOptionKey
+      )
+    );
     if (existingMenu) {
       return res.status(400).json({
-        message: "Menu already exists for this date",
+        message: optionPayload.pollOptionKey
+          ? "Menu already exists for this date and category"
+          : "Menu already exists for this date",
       });
     }
 
@@ -53,6 +97,7 @@ router.post("/", async (req, res) => {
 
     const menu = new Menu({
       date: startOfDay,
+      ...optionPayload,
       lunch: lunchPair.en,
       lunchMr: lunchPair.mr,
       dinner: dinnerPair.en,
@@ -86,7 +131,33 @@ router.put("/:id", async (req, res) => {
       return res.status(404).json({ message: "Menu not found" });
     }
 
-    if (date) menu.date = new Date(date);
+    const nextDate = date ? new Date(date) : new Date(menu.date);
+    const startOfDay = new Date(
+      Date.UTC(nextDate.getFullYear(), nextDate.getMonth(), nextDate.getDate())
+    );
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+    const optionPayload = buildOptionPayload(req.body);
+
+    const conflict = await Menu.findOne({
+      ...buildOptionConflictQuery(
+        { startOfDay, endOfDay },
+        optionPayload.pollOptionKey
+      ),
+      _id: { $ne: menu._id },
+    }).lean();
+    if (conflict) {
+      return res.status(400).json({
+        message: optionPayload.pollOptionKey
+          ? "Menu already exists for this date and category"
+          : "Menu already exists for this date",
+      });
+    }
+
+    menu.date = startOfDay;
+    menu.pollOptionKey = optionPayload.pollOptionKey;
+    menu.pollOptionLabel = optionPayload.pollOptionLabel;
+    menu.pollOptionLabelMr = optionPayload.pollOptionLabelMr;
     const [lunchPair, dinnerPair] = await Promise.all([
       resolveEnglishMarathiPair(lunchEn, req.body?.lunchMr),
       resolveEnglishMarathiPair(dinnerEn, req.body?.dinnerMr),

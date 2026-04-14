@@ -3,6 +3,7 @@ const SnackOrder = require("../models/SnackOrder");
 const Payment = require("../models/Payment");
 const LeaveRequest = require("../models/LeaveRequest");
 const Expense = require("../models/Expense");
+const MealType = require("../models/MealType");
 
 function getMonthRange(monthDate) {
   const d = monthDate instanceof Date ? monthDate : new Date(monthDate);
@@ -18,9 +19,23 @@ function getDaysInMonth(d) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 }
 
-function mealPlanToDailyRate(mealPlan) {
-  const mp = String(mealPlan || "Lunch").trim().toLowerCase();
-  return mp === "both" ? 100 : 50;
+const DEFAULT_MEAL_PLAN_PRICE = {
+  Both: 3000,
+  Dinner: 1800,
+  Lunch: 1800,
+};
+
+async function mealPlanToDailyRate(mealPlan, monthDate) {
+  const normalized = String(mealPlan || "Lunch").trim();
+  const plan = ["Lunch", "Dinner", "Both"].includes(normalized)
+    ? normalized
+    : "Lunch";
+  const monthDays = getDaysInMonth(monthDate instanceof Date ? monthDate : new Date());
+  const priceDoc = await MealType.findOne({ mealPlan: plan }).select("price").lean();
+  const monthlyPrice = Number(
+    priceDoc?.price ?? DEFAULT_MEAL_PLAN_PRICE[plan] ?? DEFAULT_MEAL_PLAN_PRICE.Lunch
+  );
+  return monthlyPrice / Math.max(1, monthDays);
 }
 
 function parseDayKeyLocal(key) {
@@ -164,7 +179,7 @@ async function calculateExpenseShareForMonth(memberId, monthDate) {
   const effectiveRateByMember = new Map();
 
   for (const m of members) {
-    const dailyRate = mealPlanToDailyRate(m.mealPlan);
+    const dailyRate = await mealPlanToDailyRate(m.mealPlan, monthStart);
     // For expense shares, exclude approved leave days from weight as well.
     const { approvedLeaveDayKeys } = await computeApprovedLeaveDayKeysForMonth(
       m._id,
@@ -200,7 +215,7 @@ async function calculateMemberBilling(memberId, monthDate) {
       inactiveDays: 0,
       chargeableLeaveDayKeys: [],
       chargeableLeaveDays: 0,
-      dailyRate: mealPlanToDailyRate(member.mealPlan),
+      dailyRate: await mealPlanToDailyRate(member.mealPlan, range.start),
       mealAmount: 0,
       snacksAmount: 0,
       expenseShare: 0,
@@ -219,7 +234,7 @@ async function calculateMemberBilling(memberId, monthDate) {
   );
   const approvedLeaveKeySet = new Set(approvedLeaveDayKeys || []);
 
-  const dailyRate = mealPlanToDailyRate(member.mealPlan);
+  const dailyRate = await mealPlanToDailyRate(member.mealPlan, range.start);
   // Monthly Due Payment (as per requirement):
   // mealAmount = activeDays * dailyRate, where:
   // - activeDays = eligibleDaysInMonth - approvedLeaveDaysInMonth

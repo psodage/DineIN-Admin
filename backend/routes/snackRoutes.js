@@ -1,13 +1,17 @@
 const express = require("express");
+const mongoose = require("mongoose");
 // Legacy route kept for older admin builds.
 // IMPORTANT: This now writes into SnackOrder so we have a single schema/collection.
 const SnackOrder = require("../models/SnackOrder");
 const {
   decrementSnackProductStock,
   incrementSnackProductStock,
+  decrementStockForOrderRows,
+  restoreDecrementedStock,
 } = require("../utils/snackStock");
 const SnackProduct = require("../models/SnackProduct");
 const { resolveEnglishMarathiPair } = require("../utils/translateEnToMr");
+const { applyPurchaseReferences } = require("../utils/snackOrderReference");
 const {
   authenticate,
   requireMember,
@@ -209,6 +213,135 @@ router.post("/", async (req, res) => {
     });
   } catch (error) {
     console.error("Create snack error:", error);
+    res.status(500).json({ message: "Failed to create snack order" });
+  }
+});
+
+// POST /api/snacks/bulk - Create multiple snack orders for one checkout
+router.post("/bulk", async (req, res) => {
+  try {
+    const {
+      studentId,
+      memberId,
+      customerName,
+      customerNameMr,
+      orders,
+      date,
+      isOutsideCustomer,
+    } = req.body || {};
+
+    const outside = !!isOutsideCustomer;
+    const resolvedMemberId = memberId || studentId;
+
+    if (!outside && !resolvedMemberId) {
+      return res.status(400).json({
+        message: "Member ID is required for member snack orders",
+      });
+    }
+
+    if (!Array.isArray(orders) || orders.length === 0) {
+      return res.status(400).json({ message: "A non-empty orders array is required" });
+    }
+
+    const cn = String(customerName || "").trim();
+    const cmr = String(customerNameMr || "").trim();
+    const namePrimary = cn || cmr;
+    if (outside && !namePrimary) {
+      return res.status(400).json({ message: "Customer name is required" });
+    }
+
+    let resolvedCustomerName;
+    let resolvedCustomerNameMr;
+    if (outside) {
+      const pair = await resolveEnglishMarathiPair(namePrimary, cmr || undefined);
+      resolvedCustomerName = pair.en;
+      resolvedCustomerNameMr = pair.mr;
+    }
+
+    const orderDate = date ? new Date(date) : new Date();
+    const commonOrderId = new mongoose.Types.ObjectId().toString();
+    const normalizedRows = [];
+
+    for (const item of orders) {
+      const rowSnackId = item?.snackId || item?.snackProductId;
+      const qty = Number(item?.quantity);
+
+      if (!rowSnackId) {
+        return res.status(400).json({ message: "snackId is required for each cart item" });
+      }
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 1) {
+        return res.status(400).json({
+          message: "Each cart item quantity must be an integer at least 1",
+        });
+      }
+
+      const snack = await SnackProduct.findById(rowSnackId).lean();
+      if (!snack) {
+        return res.status(404).json({ message: "Snack product not found" });
+      }
+      if (!snack.availability) {
+        return res.status(400).json({ message: `${snack.name} is not available` });
+      }
+
+      normalizedRows.push({
+        memberId: outside ? undefined : resolvedMemberId,
+        customerName: resolvedCustomerName,
+        customerNameMr: resolvedCustomerNameMr,
+        snackId: rowSnackId,
+        quantity: qty,
+        chargedAmount: qty * Number(snack?.price || 0),
+        date: orderDate,
+        isOutsideCustomer: outside,
+        commonOrderId,
+      });
+    }
+
+    const stockPrep = await decrementStockForOrderRows(SnackProduct, normalizedRows);
+    if (!stockPrep.ok) {
+      return res.status(400).json({ message: "Insufficient stock for one or more snacks" });
+    }
+
+    let createdOrders;
+    try {
+      createdOrders = await SnackOrder.insertMany(normalizedRows);
+    } catch (insertErr) {
+      await restoreDecrementedStock(SnackProduct, stockPrep.decremented);
+      throw insertErr;
+    }
+
+    await applyPurchaseReferences(SnackOrder, createdOrders);
+
+    const populated = await SnackOrder.find({
+      _id: { $in: createdOrders.map((o) => o._id) },
+    })
+      .populate("snackId", "name nameMr price category")
+      .populate("memberId", "name nameMr rollNumber roomOwnerName roomOwnerNameMr")
+      .lean();
+
+    const serialized = populated.map((o) => {
+      const pricePerItem = Number(o?.snackId?.price || 0);
+      const totalPrice = pricePerItem * Number(o?.quantity || 0);
+      return {
+        ...o,
+        snackItem: o?.snackId?.name || "",
+        snackItemMr: o?.snackId?.nameMr || o?.snackId?.name || "",
+        pricePerItem,
+        totalPrice,
+        memberName: !outside ? o?.memberId?.name : undefined,
+        memberNameMr: !outside ? o?.memberId?.nameMr : undefined,
+        customerName: outside ? o?.customerName : undefined,
+        customerNameMr: outside ? o?.customerNameMr : undefined,
+        referenceId: o?.purchaseReference || String(o?._id || ""),
+      };
+    });
+
+    res.status(201).json({
+      commonOrderId,
+      orders: serialized,
+      totalAmount: serialized.reduce((sum, o) => sum + Number(o.totalPrice || 0), 0),
+    });
+  } catch (error) {
+    console.error("Create bulk snacks error:", error);
     res.status(500).json({ message: "Failed to create snack order" });
   }
 });

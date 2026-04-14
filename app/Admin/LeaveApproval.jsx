@@ -13,8 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import axios from "axios";
-import { API_BASE_URL } from "../../config";
+import api from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
 
@@ -26,22 +25,17 @@ const STATUS_COLORS = {
 
 const LeaveApproval = () => {
   const router = useRouter();
-  const { token, loading: authLoading, isAuthenticated } = useAuth();
+  const { loading: authLoading, isAuthenticated } = useAuth();
   const { language } = useLanguage();
 
   const [leaves, setLeaves] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
 
-  const getAuthHeaders = () =>
-    token ? { Authorization: `Bearer ${token}` } : {};
-
   const fetchLeaves = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE_URL}/api/leave/all`, {
-        headers: getAuthHeaders(),
-      });
+      const res = await api.get("/api/leave/all");
       setLeaves(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error("Fetch leaves error:", error);
@@ -53,7 +47,7 @@ const LeaveApproval = () => {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, []);
 
   const handleCall = (phone) => {
     if (!phone) {
@@ -92,16 +86,9 @@ const LeaveApproval = () => {
       setUpdatingId(id);
       const endpoint =
         status === "Approved"
-          ? `${API_BASE_URL}/api/leave/approve/${id}`
-          : `${API_BASE_URL}/api/leave/reject/${id}`;
-
-      const res = await axios.put(
-        endpoint,
-        {},
-        {
-          headers: getAuthHeaders(),
-        }
-      );
+          ? `/api/leave/approve/${id}`
+          : `/api/leave/reject/${id}`;
+      const res = await api.put(endpoint, {});
 
       setLeaves((prev) =>
         prev.map((l) => (l._id === id ? { ...l, status: res.data.status } : l))

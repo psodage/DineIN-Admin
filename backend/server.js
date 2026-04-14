@@ -5,6 +5,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
+const { seedMealTypes } = require("./utils/seedMealTypes");
 
 const app = express();
 
@@ -12,6 +13,13 @@ app.disable("x-powered-by");
 app.set("trust proxy", 1); // needed on Render/Railway for correct req.ip behind proxy
 
 connectDB();
+seedMealTypes()
+  .then(() => {
+    console.log("MealType seed ready");
+  })
+  .catch((err) => {
+    console.error("MealType seed failed:", err?.message || err);
+  });
 
 const corsOriginEnv = process.env.CORS_ORIGIN;
 const corsOptions = {
@@ -36,9 +44,15 @@ app.use("/api", apiLimiter);
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
 app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/members", require("./routes/memberRoutes"));
+app.use("/api/students", require("./routes/studentRoutes"));
 app.use("/api/menu", require("./routes/menuRoutes"));
 app.use("/api/polls", require("./routes/pollRoutes"));
 app.use("/api/expenses", require("./routes/expenseRoutes"));
+app.use("/api/payments", require("./routes/paymentRoutes"));
+app.use("/api/leave", require("./routes/leaveRoutes"));
+app.use("/api/pending-registrations", require("./routes/pendingRegistrationRoutes"));
+app.use("/api/bill-splits", require("./routes/billSplitRoutes"));
 app.use("/api/snacks", require("./routes/snackRoutes"));
 app.use("/api/snack-products", require("./routes/snackProductRoutes"));
 

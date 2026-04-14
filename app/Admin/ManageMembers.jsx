@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Image,
   FlatList,
   TextInput,
   Modal,
@@ -13,7 +14,6 @@ import {
   Platform,
   ScrollView,
   Dimensions,
-  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,12 +22,8 @@ import api from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
 import LanguageToggle from "../../components/LanguageToggle";
-import { displayMealPlanMr, displayStatusMr } from "../../lib/memberLabelsMr";
-
-const formatCurrency = (amount) => {
-  const num = Number(amount) || 0;
-  return `₹${num.toLocaleString("en-IN")}`;
-};
+import { displayStatusMr } from "../../lib/memberLabelsMr";
+import { fetchMemberDirectory } from "../../lib/memberDirectory";
 
 const INITIAL_FORM = {
   name: "",
@@ -56,12 +52,33 @@ const ManageMembers = () => {
   const [formData, setFormData] = useState(INITIAL_FORM);
   const [editingId, setEditingId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
 
   const fetchStudents = useCallback(async () => {
-    // Member module has been removed from this project.
-    setLoading(false);
-    setStudents([]);
+    try {
+      setLoading(true);
+      const rows = await fetchMemberDirectory(api);
+      setStudents(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      Alert.alert(
+        t("alert_error"),
+        err?.response?.data?.message || t("manage_members_alert_generic_error")
+      );
+      setStudents([]);
+    } finally {
+      setLoading(false);
+    }
   }, [t]);
+
+  const fetchPendingApprovals = useCallback(async () => {
+    try {
+      const res = await api.get("/api/pending-registrations");
+      const rows = Array.isArray(res.data) ? res.data : [];
+      setPendingApprovalCount(rows.length);
+    } catch (err) {
+      setPendingApprovalCount(0);
+    }
+  }, []);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -95,43 +112,15 @@ const ManageMembers = () => {
     setFilteredStudents(filtered);
   }, [searchQuery, students, language]);
 
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchPendingApprovals();
+    }
+  }, [isAuthenticated, fetchPendingApprovals]);
+
   const openAddModal = () => {
     setEditingId(null);
     setFormData(INITIAL_FORM);
-    setModalVisible(true);
-  };
-
-  const openEditModal = (student) => {
-    setEditingId(student._id);
-    const preferMr = language === "mr";
-    setFormData({
-      name: preferMr
-        ? student.nameMr || student.name || ""
-        : student.name || student.nameMr || "",
-      nameMr: "",
-      roomOwnerName: preferMr
-        ? student.roomOwnerNameMr ||
-          student.roomOwnerName ||
-          student.roomNumber ||
-          ""
-        : student.roomOwnerName ||
-          student.roomOwnerNameMr ||
-          student.roomNumber ||
-          "",
-      roomOwnerNameMr: "",
-      phone: student.phone || "",
-      // Email is stored in `users`; backend flattens it onto `member.email`,
-      // but fall back to `userId.email` if needed.
-      email: student.email || student.userId?.email || "",
-      password: "",
-      joiningDate: student.joiningDate
-        ? new Date(student.joiningDate).toISOString().split("T")[0]
-        : new Date().toISOString().split("T")[0],
-      // Keep existing values in state for completeness, but the UI will hide these
-      // and we won't send them in the update payload.
-      status: student.status || "Active",
-      mealPlan: student.mealPlan || "Lunch",
-    });
     setModalVisible(true);
   };
 
@@ -291,56 +280,19 @@ const ManageMembers = () => {
     }
   };
 
-  const handleDelete = (student) => {
-    const displayName =
-      language === "mr" ? student.nameMr || student.name : student.name;
-    Alert.alert(
-      t("manage_members_alert_delete_title"),
-      t("manage_members_alert_delete_body").replace(
-        /\{\{name\}\}/g,
-        String(displayName || "")
-      ),
-      [
-        { text: t("button_cancel"), style: "cancel" },
-        {
-          text: t("manage_members_delete"),
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await api.delete(`/api/members/${student._id}`);
-              Alert.alert(
-                t("alert_success"),
-                t("manage_members_alert_member_deleted")
-              );
-              fetchStudents();
-            } catch (err) {
-              Alert.alert(
-                t("alert_error"),
-                err?.response?.data?.message ||
-                  t("manage_members_alert_delete_failed")
-              );
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handleCall = (phone) => {
-    if (!phone) {
-      Alert.alert(t("alert_error"), t("manage_members_alert_phone_unavailable"));
-      return;
-    }
-    const cleanedPhone = String(phone).replace(/\s+/g, "");
-    try {
-      Linking.openURL(`tel:${cleanedPhone}`);
-    } catch (err) {
-      Alert.alert(t("alert_error"), t("manage_members_alert_dialer_error"));
-    }
+  const openMemberDetails = (member) => {
+    router.push({
+      pathname: "/Admin/MemberDetails",
+      params: { memberId: String(member._id) },
+    });
   };
 
   const renderStudentCard = ({ item }) => (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.8}
+      onPress={() => openMemberDetails(item)}
+    >
       <View style={styles.cardHeader}>
         <Text style={styles.cardName} numberOfLines={2}>
           {language === "mr" ? item.nameMr || item.name : item.name}
@@ -367,83 +319,10 @@ const ManageMembers = () => {
               )}
             </Text>
           </View>
-          <TouchableOpacity
-            style={styles.calendarIconButton}
-            onPress={() => {
-              const name =
-                language === "mr" ? item.nameMr || item.name : item.name;
-              const joiningDateStr = item?.joiningDate
-                ? String(item.joiningDate).slice(0, 10)
-                : "";
-              router.push({
-                pathname: "/Admin/MemberActivityCalendar",
-                params: {
-                  memberId: String(item._id),
-                  memberName: name || "",
-                  joiningDate: joiningDateStr,
-                },
-              });
-            }}
-            activeOpacity={0.7}
-            accessibilityLabel={
-              language === "en"
-                ? "View activity calendar"
-                : "क्रियाकलाप कॅलेंडर पहा"
-            }
-          >
-            <Ionicons name="calendar-outline" size={20} color="#374151" />
-          </TouchableOpacity>
+          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
         </View>
       </View>
-      <View style={styles.cardRow}>
-        <Ionicons name="restaurant-outline" size={16} color="#6B7280" />
-        <Text style={styles.cardLabel}>{t("manage_members_meal_plan_label")}</Text>
-        <Text style={styles.cardValue}>
-          {displayMealPlanMr(
-            language,
-            item.mealPlan || "Lunch",
-            item.mealPlanMr
-          )}
-        </Text>
-      </View>
-      <View style={styles.cardRow}>
-        <Ionicons name="cash-outline" size={16} color="#6B7280" />
-        <Text style={styles.cardLabel}>{t("manage_members_due_payment_label")}</Text>
-        <Text style={styles.cardValue}>
-          {item.duePayment != null
-            ? formatCurrency(item.duePayment)
-            : item.dueAmount != null
-              ? formatCurrency(item.dueAmount)
-              : t("manage_members_na")}
-        </Text>
-      </View>
-      <View style={styles.cardActions}>
-        <TouchableOpacity
-          style={styles.callButton}
-          onPress={() => handleCall(item.phone)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="call" size={18} color="#FFFFFF" />
-          <Text style={styles.buttonText}>{t("manage_members_call")}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.editButton}
-          onPress={() => openEditModal(item)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="pencil" size={18} color="#FFFFFF" />
-          <Text style={styles.buttonText}>{t("manage_members_edit")}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => handleDelete(item)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-          <Text style={styles.buttonText}>{t("manage_members_delete")}</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
+    </TouchableOpacity>
   );
 
   const renderFormField = (label, value, onChange, placeholder, keyboardType) => (
@@ -483,7 +362,27 @@ const ManageMembers = () => {
         <Text style={styles.title}>
           {language === "en" ? "Manage Members" : "सदस्य व्यवस्थापन"}
         </Text>
-        <View style={styles.headerRight} />
+        <TouchableOpacity
+          style={styles.headerApprovalButton}
+          onPress={() => router.push("/Admin/MembersApproval")}
+          activeOpacity={0.7}
+          accessibilityLabel={
+            language === "en" ? "Members approval" : "सदस्य मंजुरी"
+          }
+        >
+          <Image
+            source={require("../../assets/images/user.png")}
+            style={styles.headerApprovalIconImage}
+            resizeMode="contain"
+          />
+          {pendingApprovalCount > 0 ? (
+            <View style={styles.headerApprovalBadge}>
+              <Text style={styles.headerApprovalBadgeText}>
+                {pendingApprovalCount > 9 ? "9+" : String(pendingApprovalCount)}
+              </Text>
+            </View>
+          ) : null}
+        </TouchableOpacity>
       </View>
 
       <View style={styles.searchContainer}>
@@ -822,6 +721,120 @@ const styles = StyleSheet.create({
   headerRight: {
     width: 40,
   },
+  headerApprovalButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerApprovalIconImage: {
+    width: 35,
+    height: 35,
+  },
+  headerApprovalBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: "#DC2626",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerApprovalBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  approvalContainer: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+  },
+  approvalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  approvalCaption: {
+    marginTop: 4,
+    marginBottom: 12,
+    fontSize: 13,
+    color: "#6B7280",
+  },
+  approvalListContent: {
+    paddingBottom: 100,
+  },
+  approvalCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  approvalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  approvalName: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  approvalPendingBadge: {
+    backgroundColor: "#FEF3C7",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  approvalPendingBadgeText: {
+    color: "#92400E",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  approvalSubText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: "#4B5563",
+  },
+  approvalActions: {
+    flexDirection: "row",
+    marginTop: 14,
+    gap: 10,
+  },
+  approvalActionButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  approvalApproveButton: {
+    backgroundColor: "#16A34A",
+  },
+  approvalRejectButton: {
+    backgroundColor: "#DC2626",
+  },
+  approvalActionButtonDisabled: {
+    opacity: 0.7,
+  },
+  approvalActionText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+  },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -884,7 +897,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
   },
   cardName: {
     fontSize: 17,
@@ -918,69 +930,6 @@ const styles = StyleSheet.create({
   },
   statusTextInactive: {
     color: "#991B1B",
-  },
-  calendarIconButton: {
-    marginLeft: 8,
-    padding: 6,
-    borderRadius: 10,
-    backgroundColor: "#F3F4F6",
-  },
-  cardRow: {
-    
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 6,
-  },
-  cardLabel: {
-    fontSize: 14,
-    color: "#6B7280",
-    marginLeft: 8,
-  },
-  cardValue: {
-    fontSize: 14,
-    color: "#111827",
-    fontWeight: "500",
-    marginLeft: 4,
-  },
-  cardActions: {
-    flexDirection: "row",
-    marginTop: 14,
-    gap: 10,
-  },
-  callButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: "#059669",
-  },
-  editButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: "#111827",
-  },
-  deleteButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: "#DC2626",
-  },
-  buttonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "600",
   },
   emptyContainer: {
     alignItems: "center",

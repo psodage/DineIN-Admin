@@ -67,7 +67,7 @@ export default function AdminLoginScreen() {
           <View style={styles.brandDivider} />
           <View style={styles.topBrandText}>
             <Text style={styles.brandTitle}>DineIN</Text>
-            <Text style={styles.brandMeta}>Eat Smart. Live Easy.</Text>
+            <Text style={styles.brandMeta}>{t("admin_brand_meta")}</Text>
           </View>
         </View>
 
@@ -75,7 +75,7 @@ export default function AdminLoginScreen() {
       </View>
 
       <View style={styles.form}>
-        <Text style={styles.formTitle}>{t("Admin Login")}</Text>
+        <Text style={styles.formTitle}>{t("admin_login_title")}</Text>
 
         <Text style={styles.subtitle}>{t("email_label")}</Text>
         <TextInput

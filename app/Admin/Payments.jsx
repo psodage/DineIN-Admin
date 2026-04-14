@@ -23,6 +23,7 @@ import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
 import LanguageToggle from "../../components/LanguageToggle";
 import { getMonthLabel, buildMonthOptionList } from "../../lib/monthLabels";
+import { fetchMemberDirectory } from "../../lib/memberDirectory";
 
 const getSelectedMonth = (monthOffset = 0) => {
   const d = new Date();
@@ -96,92 +97,63 @@ const Payments = () => {
   const [dueLoading, setDueLoading] = useState(false);
   const [dueError, setDueError] = useState("");
 
-  const [dueMonthData, setDueMonthData] = useState({
-    totals: { collected: 0, pending: 0, membersPaid: 0, remainingMembers: 0 },
-    members: [],
-  });
-  const [dueMonthLoading, setDueMonthLoading] = useState(false);
-  const [dueMonthError, setDueMonthError] = useState("");
+  const formMonthYearMonth = useMemo(() => {
+    if (!formData?.month) return null;
+    const d = new Date(formData.month);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.getFullYear() * 12 + d.getMonth();
+  }, [formData?.month]);
 
-  // Month totals shown on top cards.
+  const selectedStudentMonthPayments = useMemo(() => {
+    if (!selectedStudent?._id || formMonthYearMonth == null) return [];
+    return payments.filter((p) => {
+      const memberId = p?.studentId;
+      if (!memberId || String(memberId) !== String(selectedStudent._id)) return false;
+      const d = p?.month ? new Date(p.month) : p?.date ? new Date(p.date) : null;
+      if (!d || Number.isNaN(d.getTime())) return false;
+      const ym = d.getFullYear() * 12 + d.getMonth();
+      return ym === formMonthYearMonth;
+    });
+  }, [payments, selectedStudent?._id, formMonthYearMonth]);
+
+  const dueComputation = useMemo(() => {
+    if (!selectedStudent?._id || formMonthYearMonth == null) return null;
+    const alreadyPaidRaw = selectedStudentMonthPayments.reduce(
+      (sum, p) => sum + (Number(p?.paidAmount) || 0),
+      0
+    );
+    const latestForMonth = [...selectedStudentMonthPayments].sort((a, b) => {
+      const ad = a?.date ? new Date(a.date).getTime() : 0;
+      const bd = b?.date ? new Date(b.date).getTime() : 0;
+      return bd - ad;
+    })[0];
+    const totalBillFromHistory = Number(latestForMonth?.totalBill);
+    const totalBillFromForm = Number(formData?.totalMessFee);
+    const totalBill = Number.isFinite(totalBillFromHistory) && totalBillFromHistory > 0
+      ? totalBillFromHistory
+      : Number.isFinite(totalBillFromForm) && totalBillFromForm > 0
+      ? totalBillFromForm
+      : 0;
+    const alreadyPaidBeforeCurrentEdit = Math.max(
+      0,
+      alreadyPaidRaw - (editingId ? oldPaid : 0)
+    );
+    const remainingForMonth = Math.max(0, totalBill - alreadyPaidBeforeCurrentEdit);
+    return { remainingForMonth };
+  }, [
+    selectedStudent?._id,
+    formMonthYearMonth,
+    selectedStudentMonthPayments,
+    formData?.totalMessFee,
+    editingId,
+    oldPaid,
+  ]);
+
   useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      if (!isAuthenticated) return;
-      const year = Math.floor(selectedMonth / 12);
-      const monthIndex = selectedMonth % 12;
-      const monthParam = `${year}-${String(monthIndex + 1).padStart(2, "0")}-01`;
-
-      try {
-        setDueMonthLoading(true);
-        setDueMonthError("");
-        const res = await api.get("/api/members/due-month", {
-          params: { month: monthParam },
-        });
-        if (cancelled) return;
-        setDueMonthData(res?.data || { totals: {}, members: [] });
-      } catch (err) {
-        if (cancelled) return;
-        setDueMonthError(
-          err?.response?.data?.message || "Unable to load month due totals"
-        );
-        setDueMonthData({
-          totals: { collected: 0, pending: 0, membersPaid: 0, remainingMembers: 0 },
-          members: [],
-        });
-      } finally {
-        if (cancelled) return;
-        setDueMonthLoading(false);
-      }
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedMonth, isAuthenticated]);
-
-  // Pending section removed (still shown via summary cards above).
-
-  // dueInfo:
-  // - remainingForMonth: remaining amount for the selected month before this new payment
-  useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      setDueError("");
-      if (!selectedStudent?._id || !formData?.month) {
-        setDueInfo(null);
-        return;
-      }
-
-      try {
-        setDueLoading(true);
-        const res = await api.get(
-          `/api/members/${String(selectedStudent._id)}/due`,
-          { params: { month: formData.month } }
-        );
-        if (cancelled) return;
-        setDueInfo(res?.data || null);
-      } catch (err) {
-        if (cancelled) return;
-        setDueInfo(null);
-        setDueError(
-          err?.response?.data?.message ||
-            "Unable to load due amount right now."
-        );
-      } finally {
-        if (cancelled) return;
-        setDueLoading(false);
-      }
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedStudent?._id, formData?.month]);
+    setDueError("");
+    setDueLoading(false);
+    setDueInfo(dueComputation);
+  }, [dueComputation]);
 
   // "Current Due" should be the due amount for the selected month only.
   const previousDue = dueInfo?.remainingForMonth ?? null;
@@ -223,8 +195,8 @@ const Payments = () => {
 
   const fetchMembers = useCallback(async () => {
     try {
-      const res = await api.get("/api/members");
-      setMembers(Array.isArray(res.data) ? res.data : []);
+      const rows = await fetchMemberDirectory(api);
+      setMembers(Array.isArray(rows) ? rows : []);
     } catch (err) {
       Alert.alert("Error", err?.response?.data?.message || "Failed to load members");
       setMembers([]);
@@ -243,18 +215,6 @@ const Payments = () => {
   }, [authLoading, isAuthenticated, fetchPayments, fetchMembers]);
 
   // No client-side filtering; admin UI lists the month data directly.
-
-  const summary = payments.reduce(
-    (acc, p) => {
-      const paid = Number(p.paidAmount) || 0;
-      const remaining = Number(p.remainingAmount) || 0;
-      acc.totalCollected += paid;
-      acc.totalPending += remaining;
-      if (remaining <= 0) acc.studentsPaid += 1;
-      return acc;
-    },
-    { totalCollected: 0, totalPending: 0, studentsPaid: 0 }
-  );
 
   const earliestPaymentMonth = (() => {
     let min = null;
@@ -303,9 +263,29 @@ const Payments = () => {
       return bd - ad;
     });
 
-  const monthPendingPayments = monthPayments.filter(
-    (p) => (Number(p.remainingAmount) || 0) > 0
-  );
+  const monthSummaryTotals = useMemo(() => {
+    const memberLatest = new Map();
+    for (const p of monthPayments) {
+      const memberId = p?.studentId ? String(p.studentId) : "";
+      if (!memberId) continue;
+      const currentTs = p?.date ? new Date(p.date).getTime() : 0;
+      const previous = memberLatest.get(memberId);
+      const prevTs = previous?.date ? new Date(previous.date).getTime() : -1;
+      if (!previous || currentTs >= prevTs) {
+        memberLatest.set(memberId, p);
+      }
+    }
+    const latestRows = Array.from(memberLatest.values());
+    return {
+      collected: monthPayments.reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0),
+      pending: latestRows.reduce(
+        (sum, p) => sum + Math.max(0, Number(p.remainingAmount) || 0),
+        0
+      ),
+      membersPaid: latestRows.filter((p) => (Number(p.remainingAmount) || 0) <= 0).length,
+      remainingMembers: latestRows.filter((p) => (Number(p.remainingAmount) || 0) > 0).length,
+    };
+  }, [monthPayments]);
 
   const openAddModal = () => {
     setEditingId(null);
@@ -662,7 +642,7 @@ const Payments = () => {
                 : `प्राप्त (${getMonthLabel(selectedMonth, language)})`}
             </Text>
             <Text style={styles.summaryAmount}>
-              {dueMonthLoading ? "—" : formatCurrency(dueMonthData?.totals?.collected || 0)}
+              {formatCurrency(monthSummaryTotals.collected)}
             </Text>
           </View>
           <View style={styles.summaryCard}>
@@ -672,7 +652,7 @@ const Payments = () => {
                 : `बाकी (${getMonthLabel(selectedMonth, language)})`}
             </Text>
             <Text style={[styles.summaryAmount, styles.pendingAmount]}>
-              {dueMonthLoading ? "—" : formatCurrency(dueMonthData?.totals?.pending || 0)}
+              {formatCurrency(monthSummaryTotals.pending)}
             </Text>
           </View>
         </View>
@@ -693,7 +673,7 @@ const Payments = () => {
                 : `पेमेंट पूर्ण (${getMonthLabel(selectedMonth, language)})`}
             </Text>
             <Text style={styles.summaryAmount}>
-              {dueMonthLoading ? "—" : dueMonthData?.totals?.membersPaid || 0}
+              {monthSummaryTotals.membersPaid}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -712,7 +692,7 @@ const Payments = () => {
                 : `बाकी सदस्य (${getMonthLabel(selectedMonth, language)})`}
             </Text>
             <Text style={[styles.summaryAmount, styles.pendingAmount]}>
-              {dueMonthLoading ? "—" : dueMonthData?.totals?.remainingMembers || 0}
+              {monthSummaryTotals.remainingMembers}
             </Text>
           </TouchableOpacity>
         </View>

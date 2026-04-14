@@ -7,6 +7,8 @@ const translations = {
     alert_error: "Error",
 
     login_title: "Sign In",
+    admin_login_title: "Admin Login",
+    admin_brand_meta: "Eat Smart. Live Easy.",
     login_missing_fields: "Please enter email and password",
     login_success: "Login Successful",
     login_failed_generic: "Login failed. Please check your email and password.",
@@ -207,6 +209,8 @@ const translations = {
     alert_error: "त्रुटी",
 
     login_title: "साइन इन",
+    admin_login_title: "ॲडमिन लॉगिन",
+    admin_brand_meta: "स्मार्ट खा. सहज जगा.",
     login_missing_fields: "कृपया ईमेल आणि पासवर्ड भरा",
     login_success: "लॉगिन यशस्वी",
     login_failed_generic:

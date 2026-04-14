@@ -81,6 +81,7 @@ const MenuFormModal = ({
   onSave,
   initialData,
   isEditing,
+  pollOptions,
   language,
   t,
 }) => {
@@ -91,6 +92,9 @@ const MenuFormModal = ({
   const [dinner, setDinner] = useState(
     initialData ? menuLine(initialData, language, "dinner") : ""
   );
+  const [selectedOptionKey, setSelectedOptionKey] = useState(
+    initialData?.pollOptionKey || ""
+  );
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -100,13 +104,19 @@ const MenuFormModal = ({
         setDate(initialData.date ? new Date(initialData.date) : new Date());
         setLunch(menuLine(initialData, language, "lunch") || "");
         setDinner(menuLine(initialData, language, "dinner") || "");
+        setSelectedOptionKey(initialData.pollOptionKey || "");
       } else {
         setDate(new Date());
         setLunch("");
         setDinner("");
+        setSelectedOptionKey(
+          Array.isArray(pollOptions) && pollOptions.length > 0
+            ? pollOptions[0]?.key || ""
+            : ""
+        );
       }
     }
-  }, [visible, initialData, language]);
+  }, [visible, initialData, language, pollOptions]);
 
   const handleDateChange = (event, selectedDate) => {
     setShowDatePicker(Platform.OS === "ios");
@@ -124,12 +134,47 @@ const MenuFormModal = ({
       return;
     }
 
+    const selectedOption = (Array.isArray(pollOptions) ? pollOptions : []).find(
+      (o) => o.key === selectedOptionKey
+    );
+    if ((Array.isArray(pollOptions) ? pollOptions : []).length > 0 && !selectedOption) {
+      Alert.alert(
+        t("alert_validation_title"),
+        language === "en"
+          ? "Please select a menu category"
+          : "कृपया मेनू श्रेणी निवडा"
+      );
+      return;
+    }
+
+    const fallbackOptionPayload = selectedOptionKey
+      ? {
+          pollOptionKey: selectedOptionKey,
+          pollOptionLabel: String(initialData?.pollOptionLabel || "").trim(),
+          pollOptionLabelMr: String(
+            initialData?.pollOptionLabelMr || initialData?.pollOptionLabel || ""
+          ).trim(),
+        }
+      : {
+          pollOptionKey: "",
+          pollOptionLabel: "",
+          pollOptionLabelMr: "",
+        };
+
     setSaving(true);
     try {
       await onSave({
         date: date.toISOString(),
         lunch: l,
         dinner: d,
+        ...(selectedOption
+          ? {
+              pollOptionKey: selectedOption.key,
+              pollOptionLabel: selectedOption.label || "",
+              pollOptionLabelMr:
+                selectedOption.labelMr || selectedOption.label || "",
+            }
+          : fallbackOptionPayload),
       });
       onClose();
     } catch (err) {
@@ -204,6 +249,38 @@ const MenuFormModal = ({
               placeholderTextColor="#9CA3AF"
               multiline
             />
+
+            {(Array.isArray(pollOptions) ? pollOptions : []).length > 0 ? (
+              <>
+                <Text style={styles.label}>
+                  {language === "en" ? "Menu Category" : "मेनू श्रेणी"}
+                </Text>
+                <View style={styles.menuCategorySelector}>
+                  {pollOptions.map((opt) => {
+                    const selected = selectedOptionKey === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        style={[
+                          styles.menuCategoryChip,
+                          selected && styles.menuCategoryChipSelected,
+                        ]}
+                        onPress={() => setSelectedOptionKey(opt.key)}
+                      >
+                        <Text
+                          style={[
+                            styles.menuCategoryChipText,
+                            selected && styles.menuCategoryChipTextSelected,
+                          ]}
+                        >
+                          {formatPollOptionLabel(opt, language)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
           </ScrollView>
 
           <View style={styles.modalActions}>
@@ -216,6 +293,403 @@ const MenuFormModal = ({
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
                 <Text style={styles.saveButtonText}>{t("manage_menu_save")}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+};
+
+const CreateMenuFlowModal = ({
+  visible,
+  onClose,
+  onSave,
+  date,
+  language,
+  t,
+}) => {
+  const [optionCount, setOptionCount] = useState(1);
+  const [step, setStep] = useState(1);
+  const [singleLunch, setSingleLunch] = useState("");
+  const [singleDinner, setSingleDinner] = useState("");
+  const [optionOneLabel, setOptionOneLabel] = useState(
+    language === "mr" ? "व्हेज" : "Veg"
+  );
+  const [optionTwoLabel, setOptionTwoLabel] = useState(
+    language === "mr" ? "नॉन व्हेज" : "Non Veg"
+  );
+  const [optionOneLunch, setOptionOneLunch] = useState("");
+  const [optionOneDinner, setOptionOneDinner] = useState("");
+  const [optionTwoLunch, setOptionTwoLunch] = useState("");
+  const [optionTwoDinner, setOptionTwoDinner] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setStep(1);
+    setOptionCount(1);
+    setSingleLunch("");
+    setSingleDinner("");
+    setOptionOneLabel(language === "mr" ? "व्हेज" : "Veg");
+    setOptionTwoLabel(language === "mr" ? "नॉन व्हेज" : "Non Veg");
+    setOptionOneLunch("");
+    setOptionOneDinner("");
+    setOptionTwoLunch("");
+    setOptionTwoDinner("");
+  }, [visible, language]);
+
+  const maxStep = optionCount === 1 ? 2 : 3;
+
+  const validateCurrentStep = () => {
+    if (step === 1) return true;
+
+    if (optionCount === 1) {
+      const lunch = singleLunch.trim();
+      const dinner = singleDinner.trim();
+      if (!lunch && !dinner) {
+        Alert.alert(t("alert_validation_title"), t("manage_menu_validation_lunch_dinner"));
+        return false;
+      }
+      return true;
+    }
+
+    if (step === 2) {
+      const labelOne = optionOneLabel.trim();
+      const labelTwo = optionTwoLabel.trim();
+      if (!labelOne || !labelTwo) {
+        Alert.alert(
+          t("alert_validation_title"),
+          language === "en"
+            ? "Please enter both option names"
+            : "कृपया दोन्ही पर्यायांची नावे भरा"
+        );
+        return false;
+      }
+      return true;
+    }
+
+    const menuOne = {
+      lunch: optionOneLunch.trim(),
+      dinner: optionOneDinner.trim(),
+    };
+    const menuTwo = {
+      lunch: optionTwoLunch.trim(),
+      dinner: optionTwoDinner.trim(),
+    };
+    if ((!menuOne.lunch && !menuOne.dinner) || (!menuTwo.lunch && !menuTwo.dinner)) {
+      Alert.alert(
+        t("alert_validation_title"),
+        language === "en"
+          ? "Each option needs at least lunch or dinner"
+          : "प्रत्येक पर्यायासाठी किमान लंच किंवा डिनर भरा"
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const handleSave = async () => {
+    if (optionCount === 1) {
+      const lunch = singleLunch.trim();
+      const dinner = singleDinner.trim();
+      if (!lunch && !dinner) {
+        Alert.alert(t("alert_validation_title"), t("manage_menu_validation_lunch_dinner"));
+        return;
+      }
+      setSaving(true);
+      try {
+        await onSave({
+          date: date.toISOString(),
+          mode: "single",
+          menu: { lunch, dinner },
+        });
+        onClose();
+      } catch (err) {
+        const msg = err?.response?.data?.message || t("manage_menu_menu_save_failed");
+        Alert.alert(t("alert_error"), msg);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    const labelOne = optionOneLabel.trim();
+    const labelTwo = optionTwoLabel.trim();
+    const menuOne = {
+      lunch: optionOneLunch.trim(),
+      dinner: optionOneDinner.trim(),
+    };
+    const menuTwo = {
+      lunch: optionTwoLunch.trim(),
+      dinner: optionTwoDinner.trim(),
+    };
+
+    if (!labelOne || !labelTwo) {
+      Alert.alert(
+        t("alert_validation_title"),
+        language === "en"
+          ? "Please enter both option names"
+          : "कृपया दोन्ही पर्यायांची नावे भरा"
+      );
+      return;
+    }
+
+    if ((!menuOne.lunch && !menuOne.dinner) || (!menuTwo.lunch && !menuTwo.dinner)) {
+      Alert.alert(
+        t("alert_validation_title"),
+        language === "en"
+          ? "Each option needs at least lunch or dinner"
+          : "प्रत्येक पर्यायासाठी किमान लंच किंवा डिनर भरा"
+      );
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onSave({
+        date: date.toISOString(),
+        mode: "double",
+        poll: {
+          question: language === "mr" ? "जेवणाची पसंती" : "Meal Preference",
+          options: [
+            { label: labelOne, labelMr: labelOne },
+            { label: labelTwo, labelMr: labelTwo },
+          ],
+        },
+        menus: [
+          { optionLabel: labelOne, lunch: menuOne.lunch, dinner: menuOne.dinner },
+          { optionLabel: labelTwo, lunch: menuTwo.lunch, dinner: menuTwo.dinner },
+        ],
+      });
+      onClose();
+    } catch (err) {
+      const msg = err?.response?.data?.message || t("manage_menu_menu_save_failed");
+      Alert.alert(t("alert_error"), msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleNext = () => {
+    if (!validateCurrentStep()) return;
+    setStep((prev) => Math.min(prev + 1, maxStep));
+  };
+
+  const handleBack = () => {
+    setStep((prev) => Math.max(prev - 1, 1));
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.modalOverlay}
+      >
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>
+              {language === "en" ? "Create Menu" : "मेनू तयार करा"}
+            </Text>
+            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <Ionicons name="close" size={24} color="#4B5563" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            style={styles.formScroll}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.label}>{t("manage_menu_date")}</Text>
+            <View style={styles.dateInput}>
+              <Text style={styles.dateText}>{formatDisplayDate(date)}</Text>
+              <Ionicons name="calendar-outline" size={20} color="#6B7280" />
+            </View>
+
+            <Text style={styles.stepHintText}>
+              {language === "en"
+                ? `Step ${step} of ${maxStep}`
+                : `स्टेप ${step} / ${maxStep}`}
+            </Text>
+
+            {step === 1 ? (
+              <>
+                <Text style={styles.label}>
+                  {language === "en" ? "Number of Options" : "पर्यायांची संख्या"}
+                </Text>
+                <View style={styles.menuCategorySelector}>
+                  {[1, 2].map((count) => {
+                    const selected = optionCount === count;
+                    return (
+                      <TouchableOpacity
+                        key={count}
+                        style={[
+                          styles.menuCategoryChip,
+                          selected && styles.menuCategoryChipSelected,
+                        ]}
+                        onPress={() => setOptionCount(count)}
+                      >
+                        <Text
+                          style={[
+                            styles.menuCategoryChipText,
+                            selected && styles.menuCategoryChipTextSelected,
+                          ]}
+                        >
+                          {String(count)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
+
+            {optionCount === 1 && step === 2 ? (
+              <>
+                <Text style={styles.stepTitleText}>
+                  {language === "en" ? "Enter Menu" : "मेनू भरा"}
+                </Text>
+                <Text style={styles.label}>{t("manage_menu_lunch")}</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={singleLunch}
+                  onChangeText={setSingleLunch}
+                  placeholder={t("manage_menu_lunch_ph")}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+                <Text style={styles.label}>{t("manage_menu_dinner")}</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={singleDinner}
+                  onChangeText={setSingleDinner}
+                  placeholder={t("manage_menu_dinner_ph")}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+              </>
+            ) : null}
+
+            {optionCount === 2 && step === 2 ? (
+              <>
+                <Text style={styles.stepTitleText}>
+                  {language === "en" ? "Enter Option Names" : "पर्यायांची नावे भरा"}
+                </Text>
+                <Text style={styles.label}>
+                  {language === "en" ? "Option 1 Name" : "पर्याय 1 नाव"}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={optionOneLabel}
+                  onChangeText={setOptionOneLabel}
+                  placeholder={language === "en" ? "Veg" : "व्हेज"}
+                  placeholderTextColor="#9CA3AF"
+                />
+
+                <Text style={styles.label}>
+                  {language === "en" ? "Option 2 Name" : "पर्याय 2 नाव"}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={optionTwoLabel}
+                  onChangeText={setOptionTwoLabel}
+                  placeholder={language === "en" ? "Non Veg" : "नॉन व्हेज"}
+                  placeholderTextColor="#9CA3AF"
+                />
+              </>
+            ) : null}
+
+            {optionCount === 2 && step === 3 ? (
+              <>
+                <Text style={styles.stepTitleText}>
+                  {language === "en"
+                    ? "Enter Meals For Each Option"
+                    : "प्रत्येक पर्यायासाठी मेनू भरा"}
+                </Text>
+                <Text style={styles.optionSectionTitle}>
+                  {optionOneLabel.trim() || (language === "en" ? "Option 1" : "पर्याय 1")}
+                </Text>
+                <Text style={styles.label}>
+                  {language === "en" ? "Option 1 Lunch" : "पर्याय 1 लंच"}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={optionOneLunch}
+                  onChangeText={setOptionOneLunch}
+                  placeholder={t("manage_menu_lunch_ph")}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+                <Text style={styles.label}>
+                  {language === "en" ? "Option 1 Dinner" : "पर्याय 1 डिनर"}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={optionOneDinner}
+                  onChangeText={setOptionOneDinner}
+                  placeholder={t("manage_menu_dinner_ph")}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+
+                <Text style={styles.optionSectionTitle}>
+                  {optionTwoLabel.trim() || (language === "en" ? "Option 2" : "पर्याय 2")}
+                </Text>
+                <Text style={styles.label}>
+                  {language === "en" ? "Option 2 Lunch" : "पर्याय 2 लंच"}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={optionTwoLunch}
+                  onChangeText={setOptionTwoLunch}
+                  placeholder={t("manage_menu_lunch_ph")}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+                <Text style={styles.label}>
+                  {language === "en" ? "Option 2 Dinner" : "पर्याय 2 डिनर"}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={optionTwoDinner}
+                  onChangeText={setOptionTwoDinner}
+                  placeholder={t("manage_menu_dinner_ph")}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+              </>
+            ) : null}
+          </ScrollView>
+
+          <View style={styles.modalActionsRow}>
+            {step > 1 ? (
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={handleBack}
+                disabled={saving}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  {language === "en" ? "Back" : "मागे"}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.saveButton, saving && styles.buttonDisabled]}
+              onPress={step === maxStep ? handleSave : handleNext}
+              disabled={saving}
+            >
+              {saving ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.saveButtonText}>
+                  {step === maxStep
+                    ? t("manage_menu_save")
+                    : language === "en"
+                      ? "Next"
+                      : "पुढे"}
+                </Text>
               )}
             </TouchableOpacity>
           </View>
@@ -244,11 +718,22 @@ const PollResultsBlock = ({ poll, language, t }) => (
   </>
 );
 
+const menuCategoryLabel = (item, language) => {
+  const en = String(item?.pollOptionLabel || "").trim();
+  const mr = String(item?.pollOptionLabelMr || "").trim();
+  const fallback = String(item?.pollOptionKey || "").trim();
+  if (language === "mr") return mr || en || fallback || "";
+  return en || mr || fallback || "";
+};
+
 const MenuCard = ({ item, onEdit, onDelete, language, t, readOnly }) => (
   <View style={readOnly ? styles.menuCardPast : styles.card}>
     <Text style={readOnly ? styles.menuCardPastDate : styles.cardDate}>
       {formatDisplayDate(item.date)}
     </Text>
+    {menuCategoryLabel(item, language) ? (
+      <Text style={styles.menuCategoryBadge}>{menuCategoryLabel(item, language)}</Text>
+    ) : null}
     <View style={readOnly ? styles.menuCardPastSection : styles.cardSection}>
       <Text style={readOnly ? styles.menuCardPastLabel : styles.cardLabel}>
         {t("manage_menu_lunch")}
@@ -546,6 +1031,7 @@ const ManageMenu = () => {
   const [filterDate, setFilterDate] = useState(null);
   const [showFilterPicker, setShowFilterPicker] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
+  const [createFlowVisible, setCreateFlowVisible] = useState(false);
   const [editingMenu, setEditingMenu] = useState(null);
   const [prefillNewMenu, setPrefillNewMenu] = useState(null);
   const [pollsList, setPollsList] = useState([]);
@@ -554,6 +1040,7 @@ const ManageMenu = () => {
   const [pollFormVisible, setPollFormVisible] = useState(false);
   const [pollFormInstanceKey, setPollFormInstanceKey] = useState(0);
   const [editingPoll, setEditingPoll] = useState(null);
+  const [menuFormPollOptions, setMenuFormPollOptions] = useState([]);
   /** Lower bound from API (authoritative); avoids missing `createdAt` in AsyncStorage. */
   const [accountCreatedDay, setAccountCreatedDay] = useState(null);
 
@@ -668,6 +1155,15 @@ const ManageMenu = () => {
     !!(poll?.expiresAt && new Date(poll.expiresAt).getTime() <= Date.now());
   const pollActionsLocked = isSelectedPollDayPast || isCurrentPollExpired;
 
+  const getPollOptionsForDate = useCallback(
+    (dateLike) => {
+      const key = localDateKey(dateLike || new Date());
+      const dayPoll = pollsList.find((p) => pollDateKeyFromPollDoc(p) === key);
+      return Array.isArray(dayPoll?.options) ? dayPoll.options : [];
+    },
+    [pollsList]
+  );
+
   const sortedMenus = useMemo(
     () => [...menus].sort((a, b) => new Date(b.date) - new Date(a.date)),
     [menus]
@@ -697,23 +1193,15 @@ const ManageMenu = () => {
     [filterDate]
   );
 
+  const targetMenuDate = useMemo(() => filterDate || new Date(), [filterDate]);
+
   const handleAddMenu = () => {
-    setEditingMenu(null);
-    if (filterDate && filteredMenus.length === 0) {
-      const def = getDefaultMessMenuForDate(filterDate);
-      setPrefillNewMenu({
-        date: filterDate.toISOString(),
-        lunch: def.lunch,
-        dinner: def.dinner,
-      });
-    } else {
-      setPrefillNewMenu(null);
-    }
-    setFormVisible(true);
+    setCreateFlowVisible(true);
   };
 
   const handleEditMenu = (item) => {
     setEditingMenu(item);
+    setMenuFormPollOptions(getPollOptionsForDate(item?.date || new Date()));
     setPrefillNewMenu(null);
     setFormVisible(true);
   };
@@ -752,6 +1240,68 @@ const ManageMenu = () => {
       await axios.post(`${API_BASE_URL}/api/menu`, payload);
     }
     fetchMenus();
+  };
+
+  const handleCreateMenuFlow = async (payload) => {
+    const selectedDateKey = localDateKey(payload?.date || targetMenuDate);
+    const existingMenusForDay = menus.filter(
+      (m) => localDateKey(m.date) === selectedDateKey
+    );
+    const existingPollForDay = pollsList.find(
+      (p) => pollDateKeyFromPollDoc(p) === selectedDateKey
+    );
+
+    if (payload?.mode === "single") {
+      if (existingMenusForDay.length > 0 || existingPollForDay) {
+        throw new Error(
+          language === "en"
+            ? "Poll or menu already exists for this date"
+            : "या तारखेसाठी पोल किंवा मेनू आधीच उपलब्ध आहे"
+        );
+      }
+      await axios.post(`${API_BASE_URL}/api/menu`, {
+        date: payload.date,
+        lunch: payload?.menu?.lunch || "",
+        dinner: payload?.menu?.dinner || "",
+      });
+      await fetchMenus();
+      return;
+    }
+
+    if (existingPollForDay || existingMenusForDay.length > 0) {
+      throw new Error(
+        language === "en"
+          ? "Poll or menus already exist for this date"
+          : "या तारखेसाठी पोल किंवा मेनू आधीच उपलब्ध आहेत"
+      );
+    }
+
+    const options = (payload?.poll?.options || []).map((option, index) => ({
+      key: `option${index + 1}`,
+      label: option.label,
+      labelMr: option.labelMr,
+    }));
+
+    await api.post("/api/polls", {
+      date: payload.date,
+      question: payload?.poll?.question,
+      options,
+    });
+
+    await Promise.all(
+      (payload?.menus || []).map((menu, index) =>
+        axios.post(`${API_BASE_URL}/api/menu`, {
+          date: payload.date,
+          lunch: menu.lunch,
+          dinner: menu.dinner,
+          pollOptionKey: options[index]?.key || "",
+          pollOptionLabel: options[index]?.label || "",
+          pollOptionLabelMr: options[index]?.labelMr || options[index]?.label || "",
+        })
+      )
+    );
+
+    await Promise.all([fetchMenus(), fetchPollsList()]);
   };
 
   const handleFilterDateChange = (event, selectedDate) => {
@@ -903,12 +1453,6 @@ const ManageMenu = () => {
                     </TouchableOpacity>
                   </>
                 )
-              ) : !pollActionsLocked ? (
-                <TouchableOpacity onPress={openCreatePoll} style={{ paddingVertical: 6 }}>
-                  <Text style={{ fontWeight: "700", color: "#111827" }}>
-                    {t("manage_menu_button_create")}
-                  </Text>
-                </TouchableOpacity>
               ) : null}
             </View>
           </View>
@@ -929,19 +1473,6 @@ const ManageMenu = () => {
               <Text style={[styles.cardValue, { marginTop: 10 }]}>
                 {t("manage_menu_poll_none")}
               </Text>
-              {!pollActionsLocked ? (
-                <TouchableOpacity
-                  onPress={() => {
-                    setEditingPoll(null);
-                    setPollFormInstanceKey((k) => k + 1);
-                    setPollFormVisible(true);
-                  }}
-                  style={[styles.addButton, { marginTop: 14, marginBottom: 0 }]}
-                >
-                  <Ionicons name="add" size={20} color="#FFFFFF" />
-                  <Text style={styles.addButtonText}>{t("manage_menu_poll_create_cta")}</Text>
-                </TouchableOpacity>
-              ) : null}
             </>
           ) : (
             <PollResultsBlock poll={poll} language={language} t={t} />
@@ -1036,14 +1567,36 @@ const ManageMenu = () => {
         visible={formVisible}
         language={language}
         t={t}
+        pollOptions={menuFormPollOptions}
         onClose={() => {
           setFormVisible(false);
           setEditingMenu(null);
           setPrefillNewMenu(null);
+          setMenuFormPollOptions([]);
         }}
         onSave={handleSaveMenu}
         initialData={editingMenu || prefillNewMenu}
         isEditing={!!editingMenu}
+      />
+
+      <CreateMenuFlowModal
+        visible={createFlowVisible}
+        date={targetMenuDate}
+        language={language}
+        t={t}
+        onClose={() => setCreateFlowVisible(false)}
+        onSave={async (flowPayload) => {
+          try {
+            await handleCreateMenuFlow(flowPayload);
+            setCreateFlowVisible(false);
+          } catch (err) {
+            const msg =
+              err?.response?.data?.message ||
+              err?.message ||
+              t("manage_menu_menu_save_failed");
+            throw { response: { data: { message: msg } } };
+          }
+        }}
       />
 
       {pollFormVisible ? (
@@ -1340,11 +1893,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 20,
   },
+  modalActionsRow: {
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    flexDirection: "row",
+    gap: 10,
+  },
   saveButton: {
     backgroundColor: "#000000",
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
+    flex: 1,
+  },
+  secondaryButton: {
+    backgroundColor: "#E5E7EB",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    flex: 1,
+  },
+  secondaryButtonText: {
+    color: "#111827",
+    fontSize: 16,
+    fontWeight: "600",
   },
   buttonDisabled: {
     opacity: 0.6,
@@ -1383,6 +1955,61 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#111827",
     flexShrink: 1,
+  },
+  stepHintText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#6B7280",
+    marginBottom: 12,
+  },
+  stepTitleText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+    marginBottom: 12,
+  },
+  optionSectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+    marginBottom: 8,
+  },
+  menuCategorySelector: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 20,
+  },
+  menuCategoryChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#F3F4F6",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  menuCategoryChipSelected: {
+    backgroundColor: "#111827",
+    borderColor: "#111827",
+  },
+  menuCategoryChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  menuCategoryChipTextSelected: {
+    color: "#FFFFFF",
+  },
+  menuCategoryBadge: {
+    alignSelf: "flex-start",
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#111827",
+    backgroundColor: "#E5E7EB",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginBottom: 12,
   },
 });
 

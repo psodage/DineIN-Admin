@@ -16,12 +16,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import api from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
 import LanguageToggle from "../../components/LanguageToggle";
 import { getMonthLabel } from "../../lib/monthLabels";
+import { fetchMemberDirectory } from "../../lib/memberDirectory";
 
 const formatDisplayDate = (d) => {
   const date = d instanceof Date ? d : new Date(d);
@@ -70,7 +70,13 @@ const INITIAL_FORM = {
   snackItem: "",
   quantity: "",
   pricePerItem: "",
-  date: new Date(),
+};
+
+const INITIAL_CART_ITEM = {
+  snackProductId: "",
+  snackItem: "",
+  quantity: "",
+  pricePerItem: "",
 };
 
 export default function ExtraSnacks() {
@@ -84,13 +90,13 @@ export default function ExtraSnacks() {
   const [formVisible, setFormVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(getSelectedMonth());
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
   const [errors, setErrors] = useState({});
   const [showSnackPicker, setShowSnackPicker] = useState(false);
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [memberSearch, setMemberSearch] = useState("");
+  const [cartItems, setCartItems] = useState([]);
 
   const fetchSnacks = async () => {
     try {
@@ -138,8 +144,8 @@ export default function ExtraSnacks() {
 
   const fetchMembers = async () => {
     try {
-      const res = await api.get("/api/members");
-      setMembers(Array.isArray(res.data) ? res.data : []);
+      const rows = await fetchMemberDirectory(api);
+      setMembers(Array.isArray(rows) ? rows : []);
     } catch (err) {
       Alert.alert(
         t("alert_error"),
@@ -317,10 +323,15 @@ export default function ExtraSnacks() {
     if (!Number.isFinite(q) || !Number.isFinite(p) || q < 0 || p < 0) return 0;
     return q * p;
   })();
+  const cartTotal = cartItems.reduce(
+    (sum, item) => sum + Number(item.totalPrice || 0),
+    0
+  );
 
   const openAddForm = () => {
     setEditingId(null);
     setForm(INITIAL_FORM);
+    setCartItems([]);
     setErrors({});
     setShowSnackPicker(false);
     setShowMemberPicker(false);
@@ -359,12 +370,12 @@ export default function ExtraSnacks() {
   const closeForm = () => {
     setFormVisible(false);
     setEditingId(null);
-    setShowDatePicker(false);
+    setCartItems([]);
     setShowSnackPicker(false);
     setShowMemberPicker(false);
   };
 
-  const validate = () => {
+  const validate = (mode = "save") => {
     const e = {};
     if (form.customerType === "outside") {
       if (!form.customerName?.trim()) {
@@ -376,48 +387,116 @@ export default function ExtraSnacks() {
     } else if (!form.studentId) {
       e.studentId = "Member is required";
     }
-    if (!form.snackProductId) e.snackItem = "Snack item is required";
-    if (!form.quantity?.trim()) e.quantity = "Quantity is required";
-    else {
-      const q = Number(form.quantity);
-      if (!Number.isFinite(q) || !Number.isInteger(q) || q < 1) {
-        e.quantity = "Enter a valid quantity (integer min 1)";
-      } else if (selectedSnackProduct) {
-        const stockQty = Number(selectedSnackProduct?.quantity);
-        const isStockFinite = Number.isFinite(stockQty);
-        if (selectedSnackProduct?.availability === false) {
-          e.quantity = "This snack is not available";
-        } else if (isStockFinite && q > stockQty) {
-          e.quantity = `Only ${stockQty} available. Please reduce quantity.`;
+    const shouldValidateCurrentSnackFields =
+      mode !== "finalize" || editingId || cartItems.length === 0;
+    if (shouldValidateCurrentSnackFields) {
+      if (!form.snackProductId) e.snackItem = "Snack item is required";
+      if (!form.quantity?.trim()) e.quantity = "Quantity is required";
+      else {
+        const q = Number(form.quantity);
+        if (!Number.isFinite(q) || !Number.isInteger(q) || q < 1) {
+          e.quantity = "Enter a valid quantity (integer min 1)";
+        } else if (selectedSnackProduct) {
+          const stockQty = Number(selectedSnackProduct?.quantity);
+          const isStockFinite = Number.isFinite(stockQty);
+          const cartReservedQty =
+            mode === "cart"
+              ? cartItems.reduce((sum, item) => {
+                  return item.snackProductId === form.snackProductId
+                    ? sum + Number(item.quantity || 0)
+                    : sum;
+                }, 0)
+              : 0;
+          if (selectedSnackProduct?.availability === false) {
+            e.quantity = "This snack is not available";
+          } else if (isStockFinite && q + cartReservedQty > stockQty) {
+            const remainingQty = Math.max(stockQty - cartReservedQty, 0);
+            e.quantity = `Only ${remainingQty} available. Please reduce quantity.`;
+          }
         }
       }
     }
-    if (!form.date) e.date = "Date is required";
+    if (mode === "finalize" && !editingId && cartItems.length === 0) {
+      e.cart =
+        language === "en"
+          ? "Add at least one snack item to cart"
+          : "कार्टमध्ये किमान एक स्नॅक आयटम जोडा";
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
+  const resetCartItemFields = () => {
+    setForm((f) => ({
+      ...f,
+      ...INITIAL_CART_ITEM,
+    }));
+    setShowSnackPicker(false);
+  };
+
+  const handleAddToCart = () => {
+    if (!validate("cart")) return;
+
+    const quantity = Number(form.quantity);
+    const pricePerItem = Number(form.pricePerItem);
+    const product = snackProducts.find((p) => p._id === form.snackProductId);
+
+    setCartItems((items) => [
+      ...items,
+      {
+        id: `${form.snackProductId}-${Date.now()}-${items.length}`,
+        snackProductId: form.snackProductId,
+        snackItem: form.snackItem,
+        snackItemMr: product?.nameMr || form.snackItem,
+        quantity,
+        pricePerItem,
+        totalPrice: quantity * pricePerItem,
+      },
+    ]);
+    setErrors((e) => ({ ...e, snackItem: null, quantity: null, cart: null }));
+    resetCartItemFields();
+  };
+
+  const handleRemoveCartItem = (id) => {
+    setCartItems((items) => items.filter((item) => item.id !== id));
+  };
+
   const handleSave = async () => {
-    if (!validate()) return;
+    if (editingId) {
+      if (!validate("save")) return;
+    } else if (!validate("finalize")) {
+      return;
+    }
+
     try {
       setSaving(true);
       const isOutsideCustomer = form.customerType !== "member";
-      const payload = {
-        isOutsideCustomer,
-        studentId: isOutsideCustomer ? undefined : form.studentId,
-        customerName: isOutsideCustomer ? form.customerName.trim() : undefined,
-        snackProductId: form.snackProductId || undefined,
-        snackItem: form.snackItem.trim(),
-        quantity: Number(form.quantity),
-        pricePerItem: Number(form.pricePerItem),
-        totalPrice: totalPrice,
-        date: form.date.toISOString(),
-      };
       if (editingId) {
+        const payload = {
+          isOutsideCustomer,
+          studentId: isOutsideCustomer ? undefined : form.studentId,
+          customerName: isOutsideCustomer ? form.customerName.trim() : undefined,
+          snackProductId: form.snackProductId || undefined,
+          snackItem: form.snackItem.trim(),
+          quantity: Number(form.quantity),
+          pricePerItem: Number(form.pricePerItem),
+          totalPrice: totalPrice,
+          date: new Date().toISOString(),
+        };
         await api.put(`/api/snacks/${editingId}`, payload);
         Alert.alert(t("alert_success"), t("extra_snacks_alert_order_updated"));
       } else {
-        await api.post("/api/snacks", payload);
+        const payload = {
+          isOutsideCustomer,
+          studentId: isOutsideCustomer ? undefined : form.studentId,
+          customerName: isOutsideCustomer ? form.customerName.trim() : undefined,
+          date: new Date().toISOString(),
+          orders: cartItems.map((item) => ({
+            snackProductId: item.snackProductId,
+            quantity: Number(item.quantity),
+          })),
+        };
+        await api.post("/api/snacks/bulk", payload);
         Alert.alert(t("alert_success"), t("extra_snacks_alert_order_added"));
       }
       closeForm();
@@ -480,11 +559,6 @@ export default function ExtraSnacks() {
         },
       ]
     );
-  };
-
-  const onDateChange = (event, selectedDate) => {
-    setShowDatePicker(Platform.OS === "ios");
-    if (selectedDate) setForm((f) => ({ ...f, date: selectedDate }));
   };
 
   const renderSnackCard = ({ item }) => {
@@ -1012,27 +1086,71 @@ export default function ExtraSnacks() {
                 <Text style={styles.totalHint}>Auto calculated</Text>
               </View>
 
-              <Text style={styles.formLabel}>
-                {language === "en" ? "Date *" : "तारीख *"}
-              </Text>
-              <TouchableOpacity
-                style={[styles.input, styles.pickerInput, errors.date && styles.inputError]}
-                onPress={() => setShowDatePicker(true)}
-              >
-                <Text style={styles.pickerText}>{formatDisplayDate(form.date)}</Text>
-                <Ionicons name="calendar-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-              {showDatePicker && (
-                <DateTimePicker
-                  value={form.date}
-                  mode="date"
-                  display={Platform.OS === "ios" ? "spinner" : "default"}
-                  onChange={onDateChange}
-                  maximumDate={new Date()}
-                />
-              )}
-              {errors.date ? (
-                <Text style={styles.errorText}>{errors.date}</Text>
+              {!editingId ? (
+                <>
+                  <TouchableOpacity
+                    style={[styles.secondaryButton, saving && styles.saveButtonDisabled]}
+                    onPress={handleAddToCart}
+                    disabled={saving}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.secondaryButtonText}>
+                      {language === "en" ? "Add To Cart" : "कार्टमध्ये जोडा"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.cartSection}>
+                    <View style={styles.cartHeader}>
+                      <Text style={styles.cartTitle}>
+                        {language === "en" ? "Cart Items" : "कार्ट आयटम्स"}
+                      </Text>
+                      <Text style={styles.cartCount}>
+                        {cartItems.length} {language === "en" ? "items" : "आयटम्स"}
+                      </Text>
+                    </View>
+
+                    {cartItems.length === 0 ? (
+                      <Text style={styles.emptyCartText}>
+                        {language === "en"
+                          ? "Select snacks and add them to cart before finalizing."
+                          : "ऑर्डर अंतिम करण्यापूर्वी स्नॅक्स निवडा आणि कार्टमध्ये जोडा."}
+                      </Text>
+                    ) : (
+                      cartItems.map((item) => (
+                        <View key={item.id} style={styles.cartItemCard}>
+                          <View style={styles.cartItemInfo}>
+                            <Text style={styles.cartItemTitle}>
+                              {language === "mr"
+                                ? item.snackItemMr || item.snackItem
+                                : item.snackItem}
+                            </Text>
+                            <Text style={styles.cartItemMeta}>
+                              {item.quantity} × {formatCurrency(item.pricePerItem)} ={" "}
+                              {formatCurrency(item.totalPrice)}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.cartRemoveButton}
+                            onPress={() => handleRemoveCartItem(item.id)}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="trash-outline" size={18} color="#DC2626" />
+                          </TouchableOpacity>
+                        </View>
+                      ))
+                    )}
+
+                    <View style={styles.cartFooter}>
+                      <Text style={styles.cartTotalLabel}>
+                        {language === "en" ? "Order Total" : "ऑर्डर एकूण"}
+                      </Text>
+                      <Text style={styles.cartTotalValue}>{formatCurrency(cartTotal)}</Text>
+                    </View>
+                    {errors.cart ? (
+                      <Text style={styles.errorText}>{errors.cart}</Text>
+                    ) : null}
+                  </View>
+                </>
               ) : null}
 
               <TouchableOpacity
@@ -1050,8 +1168,8 @@ export default function ExtraSnacks() {
                         ? "Update Order"
                         : "ऑर्डर अपडेट करा"
                       : language === "en"
-                      ? "Save Order"
-                      : "ऑर्डर जतन करा"}
+                      ? "Finalize Order"
+                      : "ऑर्डर अंतिम करा"}
                   </Text>
                 )}
               </TouchableOpacity>
@@ -1276,7 +1394,7 @@ const styles = StyleSheet.create({
   },
   formScroll: {
     paddingHorizontal: 20,
-    paddingBottom: 40,
+    paddingBottom: 72,
   },
   formLabel: {
     fontSize: 14,
@@ -1384,6 +1502,7 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     marginTop: 24,
+    marginBottom: 20,
     height: 48,
     borderRadius: 12,
     backgroundColor: "#111827",
@@ -1397,6 +1516,92 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "600",
+  },
+  secondaryButton: {
+    marginTop: 24,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#E5E7EB",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryButtonText: {
+    color: "#111827",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  cartSection: {
+    marginTop: 20,
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  cartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  cartTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  cartCount: {
+    fontSize: 13,
+    color: "#6B7280",
+    fontWeight: "600",
+  },
+  emptyCartText: {
+    fontSize: 14,
+    color: "#6B7280",
+  },
+  cartItemCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 10,
+  },
+  cartItemInfo: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  cartItemTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  cartItemMeta: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  cartRemoveButton: {
+    padding: 6,
+  },
+  cartFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+  },
+  cartTotalLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  cartTotalValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
   },
 });
 
