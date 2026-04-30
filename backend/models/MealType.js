@@ -9,6 +9,12 @@ const mealTypeSchema = new mongoose.Schema(
       unique: true,
       trim: true,
     },
+    mealPlanMr: {
+      type: String,
+      required: true,
+      trim: true,
+      default: "",
+    },
     price: {
       type: Number,
       required: true,

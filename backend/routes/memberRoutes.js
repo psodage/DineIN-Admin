@@ -1,8 +1,11 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const mongoose = require("mongoose");
 const Member = require("../models/Member");
+const MemberMonthlyDue = require("../models/MemberMonthlyDue");
+const MealType = require("../models/MealType");
 const User = require("../models/User");
-const { calculateMemberBilling, getMonthRange } = require("../utils/billing");
+const { calculateMemberBilling } = require("../utils/billing");
 
 const router = express.Router();
 
@@ -17,8 +20,60 @@ function parseMonth(monthParam) {
   return new Date(year, monthIndex, 1, 0, 0, 0, 0);
 }
 
+function getMonthBounds(monthParam) {
+  const monthStart = parseMonth(monthParam);
+  if (!monthStart) return null;
+  const monthEnd = new Date(
+    monthStart.getFullYear(),
+    monthStart.getMonth() + 1,
+    1,
+    0,
+    0,
+    0,
+    0
+  );
+  return { monthStart, monthEnd };
+}
+
+function toMonthStart(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+}
+
+function pickLatestDueByMonth(rows) {
+  const byMonth = new Map();
+  for (const row of rows || []) {
+    const monthStart = toMonthStart(row?.month);
+    if (!monthStart) continue;
+    const key = monthStart.toISOString();
+    const existing = byMonth.get(key);
+    const existingUpdatedAt = existing?.updatedAt
+      ? new Date(existing.updatedAt).getTime()
+      : 0;
+    const nextUpdatedAt = row?.updatedAt ? new Date(row.updatedAt).getTime() : 0;
+    if (!existing || nextUpdatedAt >= existingUpdatedAt) {
+      byMonth.set(key, {
+        ...row,
+        month: monthStart,
+      });
+    }
+  }
+  return Array.from(byMonth.values()).sort(
+    (a, b) => new Date(a.month).getTime() - new Date(b.month).getTime()
+  );
+}
+
 router.get("/", async (_req, res) => {
   try {
+    const mealTypes = await MealType.find({}).select("mealPlan price").lean();
+    const mealPriceByPlan = mealTypes.reduce((acc, row) => {
+      const key = String(row?.mealPlan || "").toLowerCase();
+      if (!key) return acc;
+      acc[key] = Number(row?.price || 0);
+      return acc;
+    }, {});
+
     const members = await Member.find({})
       .sort({ createdAt: -1 })
       .populate("userId", "email")
@@ -27,6 +82,9 @@ router.get("/", async (_req, res) => {
     const rows = members.map((m) => ({
       ...m,
       email: m?.userId?.email || "",
+      mealPlanPrice: Number(
+        mealPriceByPlan[String(m?.mealPlan || "").toLowerCase()] || 0
+      ),
     }));
     return res.json(rows);
   } catch (error) {
@@ -37,40 +95,88 @@ router.get("/", async (_req, res) => {
 
 router.get("/due-month", async (req, res) => {
   try {
-    const monthStart = parseMonth(req.query.month) || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-    const members = await Member.find({}).populate("userId", "email").lean();
+    const { monthStart, monthEnd } =
+      getMonthBounds(req.query.month) ||
+      (() => {
+        const nowStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        const nowEnd = new Date(
+          nowStart.getFullYear(),
+          nowStart.getMonth() + 1,
+          1,
+          0,
+          0,
+          0,
+          0
+        );
+        return { monthStart: nowStart, monthEnd: nowEnd };
+      })();
 
-    const billings = await Promise.all(
-      members.map(async (m) => {
-        const b = await calculateMemberBilling(m._id, monthStart);
-        const paidAmount = Number(b?.paidAmount || 0);
-        const remainingAmount = Number(b?.remainingAmount || 0);
-        return {
-          memberId: String(m._id),
-          _id: m._id,
-          name: m.name || "",
-          nameMr: m.nameMr || m.name || "",
-          roomOwnerName: m.roomOwnerName || m.roomNumber || "",
-          roomOwnerNameMr: m.roomOwnerNameMr || m.roomOwnerName || m.roomNumber || "",
-          roomNumber: m.roomNumber || "",
-          rollNumber: m.rollNumber || "",
-          status: m.status || "Active",
-          mealPlan: m.mealPlan || "Lunch",
-          email: m?.userId?.email || "",
-          paidAmount,
-          remainingAmount,
-          dueAmount: remainingAmount,
-          monthlyStatus: remainingAmount <= 0 ? "Paid" : "Pending",
-        };
-      })
-    );
+    const monthRows = await MemberMonthlyDue.find({
+      month: { $gte: monthStart, $lt: monthEnd },
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean();
+
+    const latestByMemberId = new Map();
+    for (const row of monthRows) {
+      const memberKey = String(row?.memberId || "");
+      if (!memberKey || latestByMemberId.has(memberKey)) continue;
+      latestByMemberId.set(memberKey, row);
+    }
+
+    const members = await Member.find({})
+      .populate("userId", "email")
+      .lean();
+    const memberById = new Map(members.map((m) => [String(m._id), m]));
+
+    const billings = (
+      await Promise.all(
+        Array.from(memberById.entries()).map(async ([memberId, m]) => {
+          const monthlyDue = latestByMemberId.get(memberId);
+          let dueAmount = Math.max(0, Number(monthlyDue?.due || 0));
+          let collectedAmount = Math.max(0, Number(monthlyDue?.collected || 0));
+          let remainingAmount = dueAmount;
+          let totalBill = Math.max(0, dueAmount);
+
+          // Fallback: if monthly due cache row is missing for this member/month,
+          // compute due from billing so UI does not show N/A.
+          if (!monthlyDue) {
+            const billing = await calculateMemberBilling(memberId, monthStart);
+            dueAmount = Math.max(0, Number(billing?.totalBill || 0));
+            collectedAmount = Math.max(0, Number(billing?.paidAmount || 0));
+            remainingAmount = Math.max(0, Number(billing?.remainingAmount || 0));
+            totalBill = Math.max(0, Number(billing?.totalBill || dueAmount));
+          }
+
+          return {
+            memberId,
+            _id: m._id,
+            name: m.name || "",
+            nameMr: m.nameMr || m.name || "",
+            roomOwnerName: m.roomOwnerName || m.roomNumber || "",
+            roomOwnerNameMr: m.roomOwnerNameMr || m.roomOwnerName || m.roomNumber || "",
+            roomNumber: m.roomNumber || "",
+            rollNumber: m.rollNumber || "",
+            status: m.status || "Active",
+            mealPlan: m.mealPlan || "Lunch",
+            email: m?.userId?.email || "",
+            totalBill,
+            paidAmount: collectedAmount,
+            remainingAmount,
+            dueAmount,
+            monthlyStatus: remainingAmount <= 0 ? "Paid" : "Pending",
+          };
+        })
+      )
+    ).filter(Boolean);
 
     const totals = billings.reduce(
       (acc, m) => {
+        const hasBill = Number(m.totalBill || 0) > 0;
         acc.collected += Number(m.paidAmount || 0);
         acc.pending += Number(m.remainingAmount || 0);
-        if (Number(m.remainingAmount || 0) <= 0) acc.membersPaid += 1;
-        else acc.remainingMembers += 1;
+        if (hasBill && Number(m.remainingAmount || 0) <= 0) acc.membersPaid += 1;
+        if (hasBill && Number(m.remainingAmount || 0) > 0) acc.remainingMembers += 1;
         return acc;
       },
       { collected: 0, pending: 0, membersPaid: 0, remainingMembers: 0 }
@@ -108,6 +214,116 @@ router.get("/:id/due", async (req, res) => {
   }
 });
 
+router.get("/:id/monthly-due", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bounds =
+      getMonthBounds(req.query.month) ||
+      (() => {
+        const nowStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        const nowEnd = new Date(
+          nowStart.getFullYear(),
+          nowStart.getMonth() + 1,
+          1,
+          0,
+          0,
+          0,
+          0
+        );
+        return { monthStart: nowStart, monthEnd: nowEnd };
+      })();
+    const { monthStart, monthEnd } = bounds;
+    const rows = await MemberMonthlyDue.find({
+      memberId: id,
+      month: { $gte: monthStart, $lt: monthEnd },
+    })
+      .select("due collected status month updatedAt")
+      .lean();
+    const latestRows = pickLatestDueByMonth(rows);
+    const row = latestRows[0] || null;
+
+    const dueFromMonthlyDue = Math.max(0, Number(row?.due || 0));
+    const collectedFromMonthlyDue = Math.max(0, Number(row?.collected || 0));
+    const remainingForMonth = dueFromMonthlyDue;
+
+    return res.json({
+      memberId: id,
+      month: monthStart,
+      due: remainingForMonth,
+      paidForMonth: collectedFromMonthlyDue,
+      remainingForMonth,
+      status: remainingForMonth <= 0 ? "Paid" : row?.status || "Pending",
+    });
+  } catch (error) {
+    console.error("Get member monthly due error:", error);
+    return res.status(500).json({ message: "Failed to fetch member monthly due" });
+  }
+});
+
+router.get("/:id/monthly-due-months", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid member id" });
+    }
+
+    const rows = await MemberMonthlyDue.find({
+      memberId: id,
+    })
+      .select("month due collected status updatedAt")
+      .sort({ month: 1 })
+      .lean();
+    const latestRows = pickLatestDueByMonth(rows)
+      .map((row) => {
+        const due = Math.max(0, Number(row?.due || 0));
+        const collected = Math.max(0, Number(row?.collected || 0));
+        const remaining = due;
+        return { ...row, due, collected, remaining };
+      })
+      .filter((row) => row.remaining > 0);
+
+    return res.json({
+      memberId: id,
+      months: latestRows.map((row) => ({
+        month: row.month,
+        due: row.remaining,
+        status: row.remaining <= 0 ? "Paid" : row?.status || "Pending",
+      })),
+    });
+  } catch (error) {
+    console.error("Get member monthly due months error:", error);
+    return res.status(500).json({ message: "Failed to fetch member monthly due months" });
+  }
+});
+
+router.get("/:id/monthly-due-total", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid member id" });
+    }
+    const rows = await MemberMonthlyDue.find({
+      memberId: new mongoose.Types.ObjectId(id),
+    })
+      .select("month due collected updatedAt")
+      .lean();
+    const latestRows = pickLatestDueByMonth(rows);
+    const totalDue = latestRows.reduce((sum, row) => {
+      const due = Math.max(0, Number(row?.due || 0));
+      const collected = Math.max(0, Number(row?.collected || 0));
+      const remaining = due;
+      return remaining > 0 ? sum + remaining : sum;
+    }, 0);
+    return res.json({
+      memberId: id,
+      totalDue,
+    });
+  } catch (error) {
+    console.error("Get member monthly due total error:", error);
+    return res.status(500).json({ message: "Failed to fetch member total monthly due" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -115,9 +331,14 @@ router.get("/:id", async (req, res) => {
     if (!member) {
       return res.status(404).json({ message: "Member not found" });
     }
+    const mealType = await MealType.findOne({ mealPlan: member?.mealPlan || "Lunch" })
+      .select("price")
+      .lean();
+
     return res.json({
       ...member,
       email: member?.userId?.email || "",
+      mealPlanPrice: Number(mealType?.price || 0),
     });
   } catch (error) {
     console.error("Get member by id error:", error);

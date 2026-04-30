@@ -26,6 +26,12 @@ const memberSchema = new mongoose.Schema(
       enum: ["Lunch", "Dinner", "Both"],
       default: "Lunch",
     },
+    mealTypeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MealType",
+      index: true,
+      default: null,
+    },
     mealPlanMr: { type: String, trim: true, default: "" },
     totalMessFee: { type: Number, default: 0 },
   },

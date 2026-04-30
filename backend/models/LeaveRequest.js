@@ -8,11 +8,6 @@ const leaveRequestSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    roomNumber: {
-      type: String,
-      required: true,
-      trim: true,
-    },
     // Optional type of request, e.g. "Leave" or "Activation"
     type: {
       type: String,
@@ -21,23 +16,33 @@ const leaveRequestSchema = new mongoose.Schema(
     },
     startDate: {
       type: Date,
-      required: true,
+      required: function requiredStartDate() {
+        return this.type === "Leave";
+      },
+      default: null,
     },
     endDate: {
       type: Date,
-      required: true,
+      required: function requiredEndDate() {
+        return this.type === "Activation";
+      },
+      default: null,
     },
-    reason: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    // Marathi reason (optional; fallback to `reason`)
-    reasonMr: { type: String, trim: true, default: "" },
     status: {
       type: String,
       enum: ["Pending", "Approved", "Rejected"],
       default: "Pending",
+    },
+    source: {
+      type: String,
+      enum: ["Request", "CalendarEdit"],
+      default: "Request",
+      index: true,
+    },
+    isOngoing: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
     // Billing bookkeeping: we only add to LeaveStat.inactiveDays when a Leave
     // request duration is >= 5 days. This prevents double counting.

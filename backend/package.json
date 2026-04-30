@@ -4,7 +4,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "backfill:member-monthly-due": "node scripts/backfillMemberMonthlyDue.js",
+    "run:member-monthly-due-daily": "node scripts/runMemberMonthlyDueDaily.js",
+    "recalc:member-monthly-due-apr1": "node scripts/recalculateMemberMonthlyDueFromApr1.js",
+    "cleanup:member-monthly-due-legacy": "node scripts/cleanupMemberMonthlyDueLegacyField.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

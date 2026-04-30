@@ -6,6 +6,9 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
 const { seedMealTypes } = require("./utils/seedMealTypes");
+const {
+  startMemberMonthlyDueDailyScheduler,
+} = require("./jobs/memberMonthlyDueDailyJob");
 
 const app = express();
 
@@ -56,10 +59,11 @@ app.use("/api/bill-splits", require("./routes/billSplitRoutes"));
 app.use("/api/snacks", require("./routes/snackRoutes"));
 app.use("/api/snack-products", require("./routes/snackProductRoutes"));
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   const hasEmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
   console.log(`Nodemailer (Gmail SMTP) configured: ${hasEmail ? "yes" : "no"}`);
+  startMemberMonthlyDueDailyScheduler();
 });

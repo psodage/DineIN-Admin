@@ -3,7 +3,9 @@ const mongoose = require("mongoose");
 const LeaveRequest = require("../models/LeaveRequest");
 const LeaveStat = require("../models/LeaveStat");
 const Member = require("../models/Member");
-const { translateToMarathiIfNeeded } = require("../utils/translateEnToMr");
+const MemberMonthlyDue = require("../models/MemberMonthlyDue");
+const AppSetting = require("../models/AppSetting");
+const { calculateMemberBilling } = require("../utils/billing");
 const { statusMrFor } = require("../utils/memberLabelsMr");
 const {
   authenticate,
@@ -33,6 +35,188 @@ function formatYMDLocal(d) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function formatYMDUtc(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function parseYMDLocal(value) {
+  const m = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(y, mo, d, 0, 0, 0, 0);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+function parseYMDUtc(value) {
+  const m = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo, d, 0, 0, 0, 0));
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+const DEFAULT_LEAVE_STREAK_DAYS = 5;
+
+async function getMinLeaveStreakDays() {
+  try {
+    const setting = await AppSetting.findOne({
+      key: {
+        $in: [
+          "streak_required_days",
+          "leaveMinStreakDays",
+          "LEAVE_MIN_STREAK_DAYS",
+        ],
+      },
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .select("numberValue")
+      .lean();
+    const value = Number(setting?.numberValue);
+    if (Number.isFinite(value) && value >= 1) {
+      return Math.floor(value);
+    }
+  } catch (_err) {
+    // Fall back to default when setting lookup fails.
+  }
+  return DEFAULT_LEAVE_STREAK_DAYS;
+}
+
+function splitLeaveKeysByStreak(dayKeys, minStreakDays = DEFAULT_LEAVE_STREAK_DAYS) {
+  const parsed = Array.from(
+    new Set(
+      (Array.isArray(dayKeys) ? dayKeys : [])
+        .map((k) => String(k || "").trim())
+        .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    )
+  )
+    .map((key) => ({ key, date: parseYMDLocal(key) }))
+    .filter((x) => x.date)
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  const chargeable = [];
+  const short = [];
+  if (!parsed.length) return { chargeable, short };
+
+  let streak = [parsed[0]];
+  for (let i = 1; i < parsed.length; i += 1) {
+    const prev = streak[streak.length - 1];
+    const cur = parsed[i];
+    const diffDays = Math.round(
+      (cur.date.getTime() - prev.date.getTime()) / (24 * 60 * 60 * 1000)
+    );
+    if (diffDays === 1) {
+      streak.push(cur);
+    } else {
+      if (streak.length >= minStreakDays) chargeable.push(...streak.map((s) => s.key));
+      else short.push(...streak.map((s) => s.key));
+      streak = [cur];
+    }
+  }
+  if (streak.length >= minStreakDays) chargeable.push(...streak.map((s) => s.key));
+  else short.push(...streak.map((s) => s.key));
+
+  return { chargeable, short };
+}
+
+function computeLatestStreakMeta(dayKeys) {
+  const parsed = Array.from(
+    new Set(
+      (Array.isArray(dayKeys) ? dayKeys : [])
+        .map((k) => String(k || "").trim())
+        .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    )
+  )
+    .map((key) => parseYMDLocal(key))
+    .filter((d) => d instanceof Date && !Number.isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  if (!parsed.length) {
+    return { currentStreak: 0, lastLeaveDate: null };
+  }
+
+  let streak = 1;
+  for (let i = parsed.length - 1; i > 0; i -= 1) {
+    const cur = parsed[i];
+    const prev = parsed[i - 1];
+    const diffDays = Math.round(
+      (cur.getTime() - prev.getTime()) / (24 * 60 * 60 * 1000)
+    );
+    if (diffDays === 1) streak += 1;
+    else break;
+  }
+
+  return {
+    currentStreak: streak,
+    lastLeaveDate: parsed[parsed.length - 1],
+  };
+}
+
+function buildLeaveStreaks(dayKeys) {
+  const parsed = Array.from(
+    new Set(
+      (Array.isArray(dayKeys) ? dayKeys : [])
+        .map((k) => String(k || "").trim())
+        .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    )
+  )
+    .map((key) => ({ key, date: parseYMDLocal(key) }))
+    .filter((x) => x.date)
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  const streaks = [];
+  if (!parsed.length) return streaks;
+
+  let current = [parsed[0]];
+  for (let i = 1; i < parsed.length; i += 1) {
+    const prev = current[current.length - 1];
+    const cur = parsed[i];
+    const diffDays = Math.round(
+      (cur.date.getTime() - prev.date.getTime()) / (24 * 60 * 60 * 1000)
+    );
+    if (diffDays === 1) {
+      current.push(cur);
+    } else {
+      streaks.push({
+        startKey: current[0].key,
+        endKey: current[current.length - 1].key,
+        days: current.length,
+      });
+      current = [cur];
+    }
+  }
+  streaks.push({
+    startKey: current[0].key,
+    endKey: current[current.length - 1].key,
+    days: current.length,
+  });
+  return streaks;
+}
+
+function toDateOnlyLocal(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+}
+
+function toDateOnlyUtc(date = new Date()) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
+}
+
+function resolveLeaveMemberId(leaveDoc) {
+  if (leaveDoc?.memberId) return leaveDoc.memberId;
+  const legacyStudentId =
+    typeof leaveDoc?.get === "function" ? leaveDoc.get("studentId") : leaveDoc?.studentId;
+  if (legacyStudentId) return legacyStudentId;
+  return null;
 }
 
 /** Expand inclusive [start, end] into YYYY-MM-DD strings intersecting [rangeStart, rangeEnd]. */
@@ -151,11 +335,304 @@ router.get(
         days.forEach((d) => daySet.add(d));
       }
 
+      const monthStat = await LeaveStat.findOne({
+        memberId,
+        month: monthStart,
+      })
+        .select("chargeableLeaveDayKeys shortLeaveDayKeys")
+        .lean();
+      const manualDays = [
+        ...(Array.isArray(monthStat?.chargeableLeaveDayKeys)
+          ? monthStat.chargeableLeaveDayKeys
+          : []),
+        ...(Array.isArray(monthStat?.shortLeaveDayKeys) ? monthStat.shortLeaveDayKeys : []),
+      ];
+      manualDays.forEach((d) => {
+        if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) daySet.add(d);
+      });
+
       const sorted = Array.from(daySet).sort();
       res.json(sorted.map((date) => ({ date })));
     } catch (error) {
       console.error("Get member leave calendar error:", error);
       res.status(500).json({ message: "Failed to fetch leave calendar" });
+    }
+  }
+);
+
+/**
+ * PUT /api/leave/member/:memberId/calendar-day
+ * Admin: manually add/remove a leave day in calendar.
+ * Body: { date: "YYYY-MM-DD", inactive: true|false }
+ */
+router.put(
+  "/member/:memberId/calendar-day",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { memberId } = req.params;
+      const dateKey = String(req.body?.date || "").trim();
+      const inactive = Boolean(req.body?.inactive);
+
+      if (!memberId || !mongoose.Types.ObjectId.isValid(memberId)) {
+        return res.status(400).json({ message: "Invalid memberId" });
+      }
+      const day = parseYMDLocal(dateKey);
+      if (!day) {
+        return res.status(400).json({ message: "Invalid date. Use YYYY-MM-DD" });
+      }
+      const dayUtc = parseYMDUtc(dateKey);
+      if (!dayUtc) {
+        return res.status(400).json({ message: "Invalid date. Use YYYY-MM-DD" });
+      }
+
+      const member = await Member.findById(memberId).select("_id userId mealPlan").lean();
+      if (!member) {
+        return res.status(404).json({ message: "Member not found" });
+      }
+
+      const monthStart = new Date(day.getFullYear(), day.getMonth(), 1);
+      const monthStartUtc = new Date(
+        Date.UTC(dayUtc.getUTCFullYear(), dayUtc.getUTCMonth(), 1, 0, 0, 0, 0)
+      );
+      const monthEndUtc = new Date(monthStartUtc);
+      monthEndUtc.setUTCMonth(monthEndUtc.getUTCMonth() + 1);
+      const stat = await LeaveStat.findOneAndUpdate(
+        { memberId, month: monthStart },
+        {
+          $setOnInsert: {
+            memberId,
+            month: monthStart,
+            inactiveDays: 0,
+            chargeableLeaveDayKeys: [],
+            shortLeaveDayKeys: [],
+          },
+        },
+        { upsert: true, new: true }
+      );
+
+      const current = new Set([
+        ...(Array.isArray(stat.chargeableLeaveDayKeys) ? stat.chargeableLeaveDayKeys : []),
+        ...(Array.isArray(stat.shortLeaveDayKeys) ? stat.shortLeaveDayKeys : []),
+      ]);
+      if (inactive) current.add(dateKey);
+      else current.delete(dateKey);
+
+      const allSelectedKeys = Array.from(current).sort();
+      const minStreakDays = await getMinLeaveStreakDays();
+      const split = splitLeaveKeysByStreak(allSelectedKeys, minStreakDays);
+      const streakMeta = computeLatestStreakMeta(allSelectedKeys);
+      const leaveStreaks = buildLeaveStreaks(allSelectedKeys);
+      stat.chargeableLeaveDayKeys = split.chargeable;
+      stat.shortLeaveDayKeys = split.short;
+      stat.inactiveDays = split.chargeable.length;
+      stat.currentStreak = Number(streakMeta.currentStreak || 0);
+      stat.lastLeaveDate = streakMeta.lastLeaveDate;
+      await stat.save();
+
+      // Sync one LeaveRequest per completed streak for this month from calendar edits.
+      // If the latest streak is still running today, keep it only in LeaveStat for now.
+      const todayKeyLocal = formatYMDLocal(new Date());
+      const isCurrentMonth =
+        monthStart.getFullYear() === new Date().getFullYear() &&
+        monthStart.getMonth() === new Date().getMonth();
+      const syncedStreaks =
+        isCurrentMonth && Number(streakMeta.currentStreak || 0) > 0
+          ? leaveStreaks.filter((s) => s.endKey !== todayKeyLocal)
+          : leaveStreaks;
+      const latestSyncedStreak =
+        syncedStreaks.length > 0 ? syncedStreaks[syncedStreaks.length - 1] : null;
+      const latestSyncedEndUtc = latestSyncedStreak ? parseYMDUtc(latestSyncedStreak.endKey) : null;
+
+      await LeaveRequest.deleteMany({
+        memberId: member._id,
+        source: "CalendarEdit",
+        $or: [
+          { type: "Leave", startDate: { $gte: monthStartUtc, $lt: monthEndUtc } },
+          { type: "Activation", endDate: { $gte: monthStartUtc, $lt: monthEndUtc } },
+        ],
+      });
+      if (syncedStreaks.length > 0) {
+        const docs = syncedStreaks
+          .map((streak) => {
+            const startUtc = parseYMDUtc(streak.startKey);
+            const endUtc = parseYMDUtc(streak.endKey);
+            if (!startUtc || !endUtc) return null;
+            return [
+              {
+                memberId: member._id,
+                type: "Leave",
+                source: "CalendarEdit",
+                startDate: startUtc,
+                status: "Approved",
+                billingApplied: true,
+                billingDaysTotal: Number(streak.days || 0),
+                billingDaysByMonth: [{ month: monthStartUtc, days: Number(streak.days || 0) }],
+              },
+              {
+                memberId: member._id,
+                type: "Activation",
+                source: "CalendarEdit",
+                endDate: endUtc,
+                status: "Approved",
+                billingApplied: true,
+                billingDaysTotal: Number(streak.days || 0),
+                billingDaysByMonth: [{ month: monthStartUtc, days: Number(streak.days || 0) }],
+              },
+            ];
+          })
+          .filter(Boolean)
+          .flat();
+        if (docs.length > 0) {
+          await LeaveRequest.insertMany(docs, { ordered: true });
+        }
+      }
+      if (isCurrentMonth && latestSyncedEndUtc) {
+        // If a member-request leave was approved with temporary endDate=today while streak was running,
+        // close it once a completed streak end is known.
+        await LeaveRequest.findOneAndUpdate(
+          {
+            memberId: member._id,
+            type: "Leave",
+            source: "Request",
+            status: "Approved",
+            isOngoing: true,
+          },
+          {
+            $set: {
+              endDate: latestSyncedEndUtc,
+              isOngoing: false,
+            },
+          },
+          { sort: { updatedAt: -1, createdAt: -1 }, new: false }
+        );
+      }
+
+      const todayKeyUtc = formatYMDUtc(new Date());
+      const isEditedDayToday = dateKey === todayKeyLocal || dateKey === todayKeyUtc;
+      const isTodayMarkedInactive = isEditedDayToday
+        ? inactive
+        : current.has(todayKeyLocal) || current.has(todayKeyUtc);
+      if (isCurrentMonth && isTodayMarkedInactive) {
+        // Keep an ongoing LeaveRequest in sync when today's day is inactive via calendar edit.
+        const ongoingStreak =
+          leaveStreaks.find((s) => s.endKey === todayKeyLocal) || null;
+        const ongoingStartUtc = ongoingStreak?.startKey
+          ? parseYMDUtc(ongoingStreak.startKey)
+          : null;
+        if (ongoingStartUtc) {
+          await LeaveRequest.findOneAndUpdate(
+            {
+              memberId: member._id,
+              type: "Leave",
+              source: "Request",
+              status: "Approved",
+              isOngoing: true,
+            },
+            {
+              $setOnInsert: {
+                memberId: member._id,
+                type: "Leave",
+                source: "Request",
+                status: "Approved",
+              },
+              $set: {
+                startDate: ongoingStartUtc,
+                endDate: null,
+                isOngoing: true,
+              },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+        }
+      }
+      let updatedMemberStatus = "Active";
+      let updatedMemberStatusMr = statusMrFor("Active");
+      if (isTodayMarkedInactive) {
+        updatedMemberStatus = "Inactive";
+        updatedMemberStatusMr = statusMrFor("Inactive");
+        await Member.findByIdAndUpdate(
+          member._id,
+          {
+            $set: {
+              status: updatedMemberStatus,
+              statusMr: updatedMemberStatusMr,
+            },
+          },
+          { new: false, runValidators: true }
+        );
+      } else {
+        await Member.findByIdAndUpdate(
+          member._id,
+          {
+            $set: {
+              status: updatedMemberStatus,
+              statusMr: updatedMemberStatusMr,
+            },
+          },
+          { new: false, runValidators: true }
+        );
+      }
+
+      const monthlyBilling = await calculateMemberBilling(memberId, monthStart, {
+        approvedLeaveDayKeys: split.chargeable,
+      });
+      const nextDue = Math.max(0, Number(monthlyBilling?.remainingAmount || 0));
+      const nextCollected = Math.max(0, Number(monthlyBilling?.paidAmount || 0));
+      const nextStatus = nextDue > 0 ? "Pending" : "Paid";
+      const existingMonthlyDue = await MemberMonthlyDue.findOne({
+        memberId,
+        month: monthStart,
+      }).lean();
+
+      let monthlyDue = null;
+      if (existingMonthlyDue?._id) {
+        monthlyDue = await MemberMonthlyDue.findOneAndUpdate(
+          { _id: existingMonthlyDue._id },
+          {
+            $set: {
+              // Do not override with null for legacy members with missing userId.
+              ...(member.userId ? { userId: member.userId } : {}),
+              due: nextDue,
+              collected: nextCollected,
+              status: nextStatus,
+            },
+          },
+          { new: true }
+        );
+      } else if (member.userId) {
+        monthlyDue = await MemberMonthlyDue.create({
+          memberId,
+          userId: member.userId,
+          month: monthStart,
+          due: nextDue,
+          collected: nextCollected,
+          status: nextStatus,
+        });
+      }
+      const totalDueAgg = await MemberMonthlyDue.aggregate([
+        { $match: { memberId: member._id } },
+        { $group: { _id: null, totalDue: { $sum: "$due" } } },
+      ]);
+      const totalDue = Number(totalDueAgg?.[0]?.totalDue || 0);
+
+      return res.json({
+        memberId,
+        month: monthStart,
+        chargeableLeaveDayKeys: split.chargeable,
+        shortLeaveDayKeys: split.short,
+        inactiveDays: stat.inactiveDays,
+        memberStatus: updatedMemberStatus,
+        memberStatusMr: updatedMemberStatusMr,
+        due: Number(monthlyDue?.due ?? nextDue),
+        dueStatus: monthlyDue?.status || nextStatus,
+        totalDue,
+        minLeaveStreakDays: minStreakDays,
+      });
+    } catch (error) {
+      console.error("Update member calendar day error:", error);
+      return res.status(500).json({ message: "Failed to update calendar day" });
     }
   }
 );
@@ -179,25 +656,27 @@ router.post(
   async (req, res) => {
   try {
     const memberId = req.body.memberId || req.body.studentId;
-      const { startDate, endDate, reason, reasonMr, type } = req.body;
+      const { startDate, endDate, type } = req.body;
+    const normalizedType = type === "Activation" ? "Activation" : "Leave";
+    let start = null;
+    let end = null;
 
-    if (!memberId || !startDate || !endDate) {
-      return res.status(400).json({
-        message: "memberId, startDate and endDate are required",
-      });
+    if (!memberId) {
+      return res.status(400).json({ message: "memberId is required" });
     }
 
-    const start = parseDate(startDate);
-    const end = parseDate(endDate);
-
-    if (!start || !end) {
-      return res.status(400).json({ message: "Invalid start or end date" });
-    }
-
-    if (end < start) {
-      return res
-        .status(400)
-        .json({ message: "End date must be on or after start date" });
+    if (normalizedType === "Leave") {
+      start = parseDate(startDate);
+      if (!start) {
+        return res.status(400).json({ message: "Valid startDate is required for leave request" });
+      }
+    } else {
+      end = parseDate(endDate);
+      if (!end) {
+        return res
+          .status(400)
+          .json({ message: "Valid endDate is required for activation request" });
+      }
     }
 
     const member = await Member.findById(memberId);
@@ -205,23 +684,11 @@ router.post(
       return res.status(404).json({ message: "Member not found" });
     }
 
-      const resolvedReason = reason ? String(reason).trim() : "";
-      const resolvedReasonMrInput =
-        reasonMr !== undefined ? String(reasonMr).trim() : resolvedReason;
-
-      const resolvedReasonMr = await translateToMarathiIfNeeded({
-        enText: resolvedReason,
-        mrText: resolvedReasonMrInput,
-      });
-
       const leave = await LeaveRequest.create({
       memberId: member._id,
-      roomNumber: member.roomOwnerName || member.roomNumber || "",
       startDate: start,
       endDate: end,
-        reason: resolvedReason,
-        reasonMr: resolvedReasonMr || "",
-      type: type === "Activation" ? "Activation" : "Leave",
+      type: normalizedType,
       status: "Pending",
     });
 
@@ -296,13 +763,14 @@ router.post(
       streak = 1;
     }
 
-    // Only streaks >= 5 days should contribute to inactiveDays
+    const minStreakDays = await getMinLeaveStreakDays();
+    // Only streaks >= minStreakDays should contribute to inactiveDays
     let deltaInactive = 0;
-    if (streak === 5) {
-      // First time we hit 5 consecutive days: count all 5 at once
-      deltaInactive = 5;
-    } else if (streak > 5) {
-      // Day 6,7,... each add one more inactive day
+    if (streak === minStreakDays) {
+      // First time we hit threshold: count entire streak at once.
+      deltaInactive = minStreakDays;
+    } else if (streak > minStreakDays) {
+      // Day above threshold each adds one more inactive day.
       deltaInactive = 1;
     }
 
@@ -353,10 +821,43 @@ router.get("/all", async (req, res) => {
       )
       .lean();
 
+    // Legacy compatibility: some old leave docs can still have `studentId`
+    // instead of `memberId`. Resolve and attach member details for admin UI.
+    const legacyStudentIds = Array.from(
+      new Set(
+        leaves
+          .filter((l) => !l.memberId && l.studentId)
+          .map((l) => String(l.studentId))
+      )
+    );
+
+    const legacyMemberMap = new Map();
+    if (legacyStudentIds.length > 0) {
+      const legacyMembers = await Member.find({ _id: { $in: legacyStudentIds } })
+        .select(
+          "name nameMr rollNumber roomOwnerName roomOwnerNameMr phone status statusMr mealPlan mealPlanMr"
+        )
+        .lean();
+      for (const member of legacyMembers) {
+        legacyMemberMap.set(String(member._id), member);
+      }
+    }
+
+    leaves = leaves.map((l) => {
+      if (l.memberId) return l;
+      const fallbackMember = l.studentId
+        ? legacyMemberMap.get(String(l.studentId))
+        : null;
+      return fallbackMember ? { ...l, memberId: fallbackMember } : l;
+    });
+
     const memberIds = Array.from(
       new Set(
         leaves
-          .map((l) => l.memberId && l.memberId._id)
+          .map((l) => {
+            if (!l.memberId) return null;
+            return l.memberId._id ? l.memberId._id : l.memberId;
+          })
           .filter((id) => !!id)
           .map((id) => String(id))
       )
@@ -373,7 +874,11 @@ router.get("/all", async (req, res) => {
       );
 
       leaves = leaves.map((l) => {
-        const sid = l.memberId && l.memberId._id;
+        const sid = l.memberId
+          ? l.memberId._id
+            ? l.memberId._id
+            : l.memberId
+          : null;
         const key = sid ? String(sid) : null;
         return {
           ...l,
@@ -402,34 +907,74 @@ router.put("/approve/:id", async (req, res) => {
     if (leave.status !== "Approved") {
       leave.status = "Approved";
     }
+    const resolvedMemberId = resolveLeaveMemberId(leave);
+    if (resolvedMemberId && !leave.memberId) {
+      leave.memberId = resolvedMemberId;
+    }
 
     // Activation request -> activate member (enable app)
-    if (leave.type === "Activation" && leave.memberId) {
+    // and close/reset ongoing leave streak.
+    if (leave.type === "Activation" && resolvedMemberId) {
       try {
-        const member = await Member.findById(leave.memberId);
+        const member = await Member.findById(resolvedMemberId);
         if (member && member.status !== "Active") {
           member.status = "Active";
           member.statusMr = statusMrFor("Active");
           await member.save();
         }
+        const activationEndDateOnly = toDateOnlyUtc(new Date(leave.endDate || new Date()));
+        const closedEndDate = new Date(activationEndDateOnly);
+        await LeaveRequest.updateMany(
+          {
+            memberId: resolvedMemberId,
+            type: "Leave",
+            source: "Request",
+            status: "Approved",
+            isOngoing: true,
+          },
+          {
+            $set: {
+              endDate: closedEndDate,
+              isOngoing: false,
+            },
+          }
+        );
+
+        const activationMonthStart = getMonthStart(
+          new Date(leave.endDate || new Date())
+        );
+        await LeaveStat.findOneAndUpdate(
+          { memberId: resolvedMemberId, month: activationMonthStart },
+          {
+            $setOnInsert: {
+              memberId: resolvedMemberId,
+              month: activationMonthStart,
+            },
+            $set: {
+              currentStreak: 0,
+              lastLeaveDate: null,
+            },
+          },
+          { upsert: true, new: false }
+        );
       } catch (memberError) {
         console.error("Failed to update member status on activation approve:", memberError);
       }
     }
 
     // Leave request -> mark member inactive (disable app)
-    if (leave.type === "Leave" && leave.memberId) {
+    if (leave.type === "Leave" && resolvedMemberId) {
       try {
-        const member = await Member.findById(leave.memberId);
+        const member = await Member.findById(resolvedMemberId);
         if (member && member.status !== "Inactive") {
           member.status = "Inactive";
           member.statusMr = statusMrFor("Inactive");
           await member.save();
         }
 
-        // Billing rule: only Leave requests with duration >= 5 days contribute to inactiveDays.
-        // Apply billing only once per leave request.
-        if (member && !leave.billingApplied) {
+        // Billing rule: only completed Leave requests with duration >= 5 days
+        // contribute to inactiveDays. Ongoing leave (no endDate yet) keeps streak open.
+        if (member && leave.endDate && !leave.billingApplied) {
           const start = new Date(leave.startDate);
           const end = new Date(leave.endDate);
           const startDateOnly = new Date(
@@ -450,7 +995,7 @@ router.put("/approve/:id", async (req, res) => {
 
             leave.billingDaysTotal = totalDays;
 
-            if (totalDays >= 5) {
+            if (totalDays >= (await getMinLeaveStreakDays())) {
               const breakdown = [];
 
               // Split across months
@@ -505,6 +1050,11 @@ router.put("/approve/:id", async (req, res) => {
 
           leave.billingApplied = true;
         }
+        if (leave.source === "Request") {
+          const todayDateOnly = toDateOnlyLocal(new Date());
+          const leaveStartDateOnly = toDateOnlyLocal(new Date(leave.startDate));
+          leave.isOngoing = !leave.endDate || leaveStartDateOnly.getTime() <= todayDateOnly.getTime();
+        }
       } catch (memberError) {
         console.error("Failed to update member status on leave approve:", memberError);
       }
@@ -527,6 +1077,10 @@ router.put("/reject/:id", async (req, res) => {
       return res.status(404).json({ message: "Leave request not found" });
     }
 
+    const resolvedMemberId = resolveLeaveMemberId(leave);
+    if (resolvedMemberId && !leave.memberId) {
+      leave.memberId = resolvedMemberId;
+    }
     leave.status = "Rejected";
     await leave.save();
 

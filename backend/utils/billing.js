@@ -2,6 +2,7 @@ const Member = require("../models/Member");
 const SnackOrder = require("../models/SnackOrder");
 const Payment = require("../models/Payment");
 const LeaveRequest = require("../models/LeaveRequest");
+const LeaveStat = require("../models/LeaveStat");
 const Expense = require("../models/Expense");
 const MealType = require("../models/MealType");
 
@@ -88,6 +89,23 @@ function isBefore(dateA, dateB) {
 async function computeApprovedLeaveDayKeysForMonth(memberId, monthStart) {
   const range = getMonthRange(monthStart);
   if (!range) return { approvedLeaveDayKeys: [] };
+  const monthKeyStart = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
+
+  const stat = await LeaveStat.findOne({
+    memberId,
+    month: monthKeyStart,
+  })
+    .select("chargeableLeaveDayKeys shortLeaveDayKeys")
+    .lean();
+  const statChargeable = Array.isArray(stat?.chargeableLeaveDayKeys)
+    ? stat.chargeableLeaveDayKeys
+    : [];
+  const statShort = Array.isArray(stat?.shortLeaveDayKeys) ? stat.shortLeaveDayKeys : [];
+  if (statChargeable.length > 0 || statShort.length > 0) {
+    return {
+      approvedLeaveDayKeys: Array.from(new Set(statChargeable)),
+    };
+  }
 
   const monthEndInclusive = addDaysLocal(range.endExclusive, -1);
 
@@ -200,7 +218,7 @@ async function calculateExpenseShareForMonth(memberId, monthDate) {
   return totalExpenses * (memberEffectiveRate / totalEffectiveRate);
 }
 
-async function calculateMemberBilling(memberId, monthDate) {
+async function calculateMemberBilling(memberId, monthDate, options = {}) {
   const range = getMonthRange(monthDate);
   if (!range) return null;
 
@@ -228,11 +246,12 @@ async function calculateMemberBilling(memberId, monthDate) {
 
   // MemberActivityCalendar-style leave days: count ALL approved leave days in that month.
   // Also do not count future days for the current month.
-  const { approvedLeaveDayKeys } = await computeApprovedLeaveDayKeysForMonth(
-    memberId,
-    range.start
-  );
-  const approvedLeaveKeySet = new Set(approvedLeaveDayKeys || []);
+  const overrideLeaveDayKeys = Array.isArray(options?.approvedLeaveDayKeys)
+    ? options.approvedLeaveDayKeys
+    : null;
+  const { approvedLeaveDayKeys } = overrideLeaveDayKeys
+    ? { approvedLeaveDayKeys: overrideLeaveDayKeys }
+    : await computeApprovedLeaveDayKeysForMonth(memberId, range.start);
 
   const dailyRate = await mealPlanToDailyRate(member.mealPlan, range.start);
   // Monthly Due Payment (as per requirement):

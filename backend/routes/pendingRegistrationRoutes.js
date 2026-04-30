@@ -2,6 +2,7 @@ const express = require("express");
 const PendingRegistration = require("../models/PendingRegistration");
 const User = require("../models/User");
 const Member = require("../models/Member");
+const MemberMonthlyDue = require("../models/MemberMonthlyDue");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 
 const router = express.Router();
@@ -56,6 +57,23 @@ router.put("/approve/:id", authenticate, requireAdmin, async (req, res) => {
         ? pending.mealPlan
         : "Lunch",
       status: "Active",
+    });
+
+    const currentMonthStart = new Date(
+      new Date().getFullYear(),
+      new Date().getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0
+    );
+
+    await MemberMonthlyDue.create({
+      memberId: member._id,
+      userId: user._id,
+      month: currentMonthStart,
+      due: 0,
     });
 
     await PendingRegistration.findByIdAndDelete(id);

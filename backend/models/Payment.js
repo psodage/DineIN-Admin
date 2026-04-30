@@ -17,8 +17,13 @@ const paymentSchema = new mongoose.Schema(
 
     paymentMethod: {
       type: String,
-      enum: ["Cash", "UPI", "Bank Transfer"],
+      enum: ["Cash", "UPI"],
       default: "Cash",
+    },
+    upiTransactionId: {
+      type: String,
+      trim: true,
+      default: "",
     },
 
     date: { type: Date, default: Date.now },

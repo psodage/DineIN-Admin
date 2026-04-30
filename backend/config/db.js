@@ -53,6 +53,29 @@ const connectDB = async () => {
           );
         }
       }
+
+      // Payments index migration:
+      // older builds created a unique compound index { memberId: 1, month: 1 }.
+      // We now allow multiple payment rows per member/month (installments/history),
+      // so drop that unique index if it still exists.
+      if (names.has("payments")) {
+        const paymentsColl = db.collection("payments");
+        const indexes = await paymentsColl.indexes();
+        const staleUniqueIdx = indexes.find((idx) => {
+          const key = idx?.key || {};
+          return (
+            idx?.unique === true &&
+            Number(key.memberId) === 1 &&
+            Number(key.month) === 1
+          );
+        });
+        if (staleUniqueIdx?.name) {
+          await paymentsColl.dropIndex(staleUniqueIdx.name);
+          console.log(
+            `Migration: dropped stale unique payments index "${staleUniqueIdx.name}"`
+          );
+        }
+      }
     } catch (migrationError) {
       console.warn("Migration skipped/failed:", migrationError?.message || migrationError);
     }
