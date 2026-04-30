@@ -244,7 +244,7 @@ router.get("/:id/monthly-due", async (req, res) => {
 
     const dueFromMonthlyDue = Math.max(0, Number(row?.due || 0));
     const collectedFromMonthlyDue = Math.max(0, Number(row?.collected || 0));
-    const remainingForMonth = dueFromMonthlyDue;
+    const remainingForMonth = Math.max(0, dueFromMonthlyDue - collectedFromMonthlyDue);
 
     return res.json({
       memberId: id,
@@ -277,7 +277,7 @@ router.get("/:id/monthly-due-months", async (req, res) => {
       .map((row) => {
         const due = Math.max(0, Number(row?.due || 0));
         const collected = Math.max(0, Number(row?.collected || 0));
-        const remaining = due;
+        const remaining = Math.max(0, due - collected);
         return { ...row, due, collected, remaining };
       })
       .filter((row) => row.remaining > 0);
@@ -311,7 +311,7 @@ router.get("/:id/monthly-due-total", async (req, res) => {
     const totalDue = latestRows.reduce((sum, row) => {
       const due = Math.max(0, Number(row?.due || 0));
       const collected = Math.max(0, Number(row?.collected || 0));
-      const remaining = due;
+      const remaining = Math.max(0, due - collected);
       return remaining > 0 ? sum + remaining : sum;
     }, 0);
     return res.json({

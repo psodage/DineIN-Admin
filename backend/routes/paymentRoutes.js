@@ -531,6 +531,7 @@ router.delete("/:id", async (req, res) => {
     await applyMonthlyDuePaymentDelta({
       memberId: payment.memberId,
       month: payment.month,
+      // On delete, collected must be reduced by removed payment amount.
       deltaPaid: -(Number(payment.paidAmount) || 0),
     });
     await syncMonthlyDueCollectedFromPayments({

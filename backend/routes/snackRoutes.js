@@ -12,6 +12,7 @@ const {
 const SnackProduct = require("../models/SnackProduct");
 const { resolveEnglishMarathiPair } = require("../utils/translateEnToMr");
 const { applyPurchaseReferences } = require("../utils/snackOrderReference");
+const { upsertMemberMonthlyBill } = require("../utils/memberMonthlyBillCache");
 const {
   authenticate,
   requireMember,
@@ -19,6 +20,12 @@ const {
 } = require("../middleware/authMiddleware");
 
 const router = express.Router();
+
+function toMonthStart(dateValue) {
+  const d = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+}
 
 // GET /api/snacks - Fetch all snack orders
 router.get("/", async (req, res) => {
@@ -196,6 +203,13 @@ router.post("/", async (req, res) => {
       .populate("memberId", "name nameMr rollNumber roomOwnerName roomOwnerNameMr")
       .lean();
 
+    if (!outside && populated?.memberId?._id) {
+      const monthStart = toMonthStart(populated.date);
+      if (monthStart) {
+        await upsertMemberMonthlyBill(populated.memberId._id, monthStart);
+      }
+    }
+
     const pricePerItem = Number(populated?.snackId?.price || 0);
     const totalPrice = pricePerItem * Number(populated?.quantity || 0);
 
@@ -335,6 +349,13 @@ router.post("/bulk", async (req, res) => {
       };
     });
 
+    if (!outside && resolvedMemberId) {
+      const monthStart = toMonthStart(orderDate);
+      if (monthStart) {
+        await upsertMemberMonthlyBill(resolvedMemberId, monthStart);
+      }
+    }
+
     res.status(201).json({
       commonOrderId,
       orders: serialized,
@@ -368,6 +389,8 @@ router.put("/:id", async (req, res) => {
     if (!order) return res.status(404).json({ message: "Snack order not found" });
     const previousSnackId = order.snackId ? String(order.snackId) : "";
     const previousQty = Number(order.quantity) || 0;
+    const previousMemberId = order.memberId ? String(order.memberId) : "";
+    const previousMonthStart = toMonthStart(order.date);
 
     const outside = typeof isOutsideCustomer === "boolean" ? isOutsideCustomer : order.isOutsideCustomer;
 
@@ -501,6 +524,21 @@ router.put("/:id", async (req, res) => {
       throw saveErr;
     }
 
+    const nextMemberId = order.memberId ? String(order.memberId) : "";
+    const nextMonthStart = toMonthStart(order.date);
+    const recalcTargets = new Set();
+    if (previousMemberId && previousMonthStart) {
+      recalcTargets.add(`${previousMemberId}::${previousMonthStart.toISOString()}`);
+    }
+    if (nextMemberId && nextMonthStart) {
+      recalcTargets.add(`${nextMemberId}::${nextMonthStart.toISOString()}`);
+    }
+    for (const target of recalcTargets) {
+      const [memberIdStr, monthIso] = target.split("::");
+      if (!memberIdStr || !monthIso) continue;
+      await upsertMemberMonthlyBill(memberIdStr, new Date(monthIso));
+    }
+
     const populated = await SnackOrder.findById(order._id)
       .populate("snackId", "name nameMr price category")
       .populate("memberId", "name nameMr rollNumber roomOwnerName roomOwnerNameMr")
@@ -535,12 +573,19 @@ router.delete("/:id", async (req, res) => {
       return res.status(404).json({ message: "Snack order not found" });
     }
 
+    const memberId = order.memberId ? String(order.memberId) : "";
+    const monthStart = toMonthStart(order.date);
+
     await SnackOrder.deleteOne({ _id: order._id });
     await incrementSnackProductStock(
       SnackProduct,
       order.snackId,
       Number(order.quantity) || 0
     );
+
+    if (memberId && monthStart) {
+      await upsertMemberMonthlyBill(memberId, monthStart);
+    }
 
     res.json({ message: "Snack order deleted successfully" });
   } catch (error) {
