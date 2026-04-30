@@ -7,6 +7,7 @@ import {
   FlatList,
   ActivityIndicator,
   Alert,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -23,6 +24,7 @@ const MembersApproval = () => {
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updatingApprovalId, setUpdatingApprovalId] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchPendingApprovals = useCallback(async () => {
     try {
@@ -53,6 +55,15 @@ const MembersApproval = () => {
       fetchPendingApprovals();
     }
   }, [authLoading, isAuthenticated, router, fetchPendingApprovals]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchPendingApprovals();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchPendingApprovals]);
 
   const updateApprovalStatus = async (pendingId, status) => {
     try {
@@ -213,6 +224,9 @@ const MembersApproval = () => {
             data={pendingApprovals}
             keyExtractor={(item) => item._id}
             renderItem={renderApprovalCard}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
             contentContainerStyle={styles.listContent}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>

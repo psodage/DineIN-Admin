@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -33,6 +34,7 @@ const AdminDashboard = () => {
   const { t } = useLanguage();
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
   const [pendingLeaveCount, setPendingLeaveCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchPendingLeaveCount = useCallback(async () => {
     if (!isAuthenticated || loading) return;
@@ -69,6 +71,15 @@ const AdminDashboard = () => {
       return () => clearInterval(intervalId);
     }, [fetchPendingLeaveCount])
   );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchPendingLeaveCount();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchPendingLeaveCount]);
 
   const handleCardPress = (cardId) => {
     switch (cardId) {
@@ -122,6 +133,9 @@ const AdminDashboard = () => {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
      
 

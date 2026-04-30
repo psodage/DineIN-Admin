@@ -312,6 +312,8 @@ const CreateMenuFlowModal = ({
 }) => {
   const [optionCount, setOptionCount] = useState(1);
   const [step, setStep] = useState(1);
+  const [menuDate, setMenuDate] = useState(date ? new Date(date) : new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [singleLunch, setSingleLunch] = useState("");
   const [singleDinner, setSingleDinner] = useState("");
   const [optionOneLabel, setOptionOneLabel] = useState(
@@ -330,17 +332,30 @@ const CreateMenuFlowModal = ({
     if (!visible) return;
     setStep(1);
     setOptionCount(1);
+    setMenuDate(date ? new Date(date) : new Date());
+    setShowDatePicker(false);
     setSingleLunch("");
     setSingleDinner("");
-    setOptionOneLabel(language === "mr" ? "व्हेज" : "Veg");
-    setOptionTwoLabel(language === "mr" ? "नॉन व्हेज" : "Non Veg");
     setOptionOneLunch("");
     setOptionOneDinner("");
     setOptionTwoLunch("");
     setOptionTwoDinner("");
+  }, [visible, date]);
+
+  // Keep user-chosen `menuDate` stable while they are creating menus.
+  // Only update default option labels when language changes.
+  useEffect(() => {
+    if (!visible) return;
+    setOptionOneLabel(language === "mr" ? "व्हेज" : "Veg");
+    setOptionTwoLabel(language === "mr" ? "नॉन व्हेज" : "Non Veg");
   }, [visible, language]);
 
   const maxStep = optionCount === 1 ? 2 : 3;
+
+  const handleDateChange = (event, selectedDate) => {
+    setShowDatePicker(Platform.OS === "ios");
+    if (selectedDate) setMenuDate(selectedDate);
+  };
 
   const validateCurrentStep = () => {
     if (step === 1) return true;
@@ -401,7 +416,7 @@ const CreateMenuFlowModal = ({
       setSaving(true);
       try {
         await onSave({
-          date: date.toISOString(),
+          date: menuDate.toISOString(),
           mode: "single",
           menu: { lunch, dinner },
         });
@@ -449,7 +464,7 @@ const CreateMenuFlowModal = ({
     setSaving(true);
     try {
       await onSave({
-        date: date.toISOString(),
+        date: menuDate.toISOString(),
         mode: "double",
         poll: {
           question: language === "mr" ? "जेवणाची पसंती" : "Meal Preference",
@@ -503,10 +518,20 @@ const CreateMenuFlowModal = ({
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.label}>{t("manage_menu_date")}</Text>
-            <View style={styles.dateInput}>
-              <Text style={styles.dateText}>{formatDisplayDate(date)}</Text>
+            <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
+              <Text style={styles.dateText}>{formatDisplayDate(menuDate)}</Text>
               <Ionicons name="calendar-outline" size={20} color="#6B7280" />
-            </View>
+            </TouchableOpacity>
+
+            {showDatePicker && (
+              <DateTimePicker
+                value={menuDate}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                onChange={handleDateChange}
+                style={Platform.OS === "ios" ? styles.iosDatePicker : null}
+              />
+            )}
 
             <Text style={styles.stepHintText}>
               {language === "en"

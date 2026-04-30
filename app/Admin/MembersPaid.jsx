@@ -33,7 +33,7 @@ const parseMonthParamToYearMonth = (monthParam) => {
   return year * 12 + monthIndex;
 };
 
-export default function RemainingMembers() {
+export default function MembersPaid() {
   const router = useRouter();
   const { month: monthParamRaw } = useLocalSearchParams();
   const { loading: authLoading, isAuthenticated } = useAuth();
@@ -50,11 +50,10 @@ export default function RemainingMembers() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [members, setMembers] = useState([]);
-
   const [searchQuery, setSearchQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchDueMonth = useCallback(async () => {
+  const fetchPaidMembers = useCallback(async () => {
     if (!monthParam) {
       setErrorMsg(
         language === "mr"
@@ -75,16 +74,17 @@ export default function RemainingMembers() {
       const rawMembers = Array.isArray(res?.data?.members)
         ? res.data.members
         : [];
-      const remaining = rawMembers.filter(
-        (m) => Number(m?.remainingAmount || 0) > 0
+      const paidMembers = rawMembers.filter(
+        (m) =>
+          Number(m?.totalBill || 0) > 0 && Number(m?.remainingAmount || 0) <= 0
       );
-      setMembers(remaining);
+      setMembers(paidMembers);
     } catch (err) {
       const message =
         err?.response?.data?.message ||
         (language === "mr"
-          ? "उर्वरित सदस्य लोड करता आला नाही"
-          : "Failed to load remaining members");
+          ? "पेमेंट पूर्ण सदस्य लोड करता आले नाहीत"
+          : "Failed to load paid members");
       setErrorMsg(message);
       setMembers([]);
       Alert.alert("Error", message);
@@ -98,17 +98,17 @@ export default function RemainingMembers() {
       router.replace("/");
       return;
     }
-    if (!authLoading && isAuthenticated) fetchDueMonth();
-  }, [authLoading, isAuthenticated, fetchDueMonth, router]);
+    if (!authLoading && isAuthenticated) fetchPaidMembers();
+  }, [authLoading, isAuthenticated, fetchPaidMembers, router]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await fetchDueMonth();
+      await fetchPaidMembers();
     } finally {
       setRefreshing(false);
     }
-  }, [fetchDueMonth]);
+  }, [fetchPaidMembers]);
 
   const filteredMembers = useMemo(() => {
     const q = (searchQuery || "").toLowerCase().trim();
@@ -134,8 +134,8 @@ export default function RemainingMembers() {
   }, [members, searchQuery, language]);
 
   const renderMemberCard = ({ item }) => {
-    const remaining = Number(item?.remainingAmount || 0);
     const paid = Number(item?.paidAmount || 0);
+    const totalBill = Number(item?.totalBill || 0);
     const displayName =
       language === "mr" ? item?.nameMr || item?.name : item?.name;
     const roomOwner =
@@ -149,20 +149,16 @@ export default function RemainingMembers() {
           <Text style={styles.cardName} numberOfLines={2}>
             {displayName || "Unknown"}
           </Text>
-          <View style={[styles.badge, styles.badgePending]}>
-            <Text style={[styles.badgeText, styles.badgeTextPending]}>
-              {language === "mr" ? "बाकी" : "Pending"}
+          <View style={[styles.badge, styles.badgePaid]}>
+            <Text style={[styles.badgeText, styles.badgeTextPaid]}>
+              {language === "mr" ? "पूर्ण" : "Paid"}
             </Text>
           </View>
         </View>
 
         <View style={styles.cardRow}>
-          <Text style={styles.cardLabel}>
-            {language === "mr" ? "उर्वरित:" : "Remaining:"}
-          </Text>
-          <Text style={[styles.cardValue, styles.remainingRed]}>
-            {formatCurrency(remaining)}
-          </Text>
+          <Text style={styles.cardLabel}>{language === "mr" ? "एकूण बिल:" : "Total bill:"}</Text>
+          <Text style={styles.cardValue}>{formatCurrency(totalBill)}</Text>
         </View>
 
         <View style={styles.cardRow}>
@@ -199,7 +195,7 @@ export default function RemainingMembers() {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.title}>
-            {language === "en" ? "Remaining Members" : "बाकी सदस्य"}
+            {language === "en" ? "Members Paid" : "पेमेंट पूर्ण सदस्य"}
           </Text>
           <Text style={styles.subtitle}>{monthLabel}</Text>
         </View>
@@ -266,8 +262,8 @@ export default function RemainingMembers() {
                 {errorMsg
                   ? errorMsg
                   : language === "en"
-                    ? `No remaining members for ${monthLabel}.`
-                    : `${monthLabel} साठी कोणतेही बाकी सदस्य नाहीत.`}
+                    ? `No paid members for ${monthLabel}.`
+                    : `${monthLabel} साठी पेमेंट पूर्ण सदस्य नाहीत.`}
               </Text>
             </View>
           }
@@ -380,15 +376,15 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
   },
-  badgePending: {
-    backgroundColor: "#FEE2E2",
+  badgePaid: {
+    backgroundColor: "#D1FAE5",
   },
   badgeText: {
     fontSize: 12,
     fontWeight: "600",
   },
-  badgeTextPending: {
-    color: "#991B1B",
+  badgeTextPaid: {
+    color: "#065F46",
   },
   cardRow: {
     flexDirection: "row",
@@ -406,10 +402,6 @@ const styles = StyleSheet.create({
     color: "#111827",
     fontWeight: "500",
   },
-  remainingRed: {
-    color: "#DC2626",
-    fontWeight: "600",
-  },
   emptyContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -422,4 +414,3 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 });
-

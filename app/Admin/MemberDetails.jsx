@@ -7,7 +7,9 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  TextInput,
   useWindowDimensions,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -21,7 +23,16 @@ const formatDate = (value, fallback = "-") => {
   if (!value) return fallback;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return fallback;
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const formatCurrency = (value) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "-";
+  return `Rs. ${amount.toFixed(2)}`;
 };
 
 const getMonthParam = (date) => {
@@ -72,10 +83,26 @@ export default function MemberDetails() {
   const [loading, setLoading] = useState(true);
   const [calendarLoading, setCalendarLoading] = useState(true);
   const [member, setMember] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [calendarDayUpdating, setCalendarDayUpdating] = useState("");
+  const [monthlyDue, setMonthlyDue] = useState(0);
+  const [totalMonthlyDue, setTotalMonthlyDue] = useState(0);
+  const [form, setForm] = useState({
+    name: "",
+    roomOwnerName: "",
+    phone: "",
+    email: "",
+    joiningDate: "",
+    status: "Active",
+    mealPlan: "Lunch",
+  });
   const [leaveDates, setLeaveDates] = useState([]);
   const [monthDate, setMonthDate] = useState(() =>
     normalizeMonthDate(new Date()) || new Date()
   );
+  const [refreshing, setRefreshing] = useState(false);
 
   const memberIdValue = String(memberId || "").trim();
   const monthParam = useMemo(() => getMonthParam(monthDate), [monthDate]);
@@ -96,7 +123,19 @@ export default function MemberDetails() {
     try {
       setLoading(true);
       const res = await api.get(`/api/members/${memberIdValue}`);
-      setMember(res.data || null);
+      const payload = res.data || null;
+      setMember(payload);
+      setForm({
+        name: String(payload?.name || "").trim(),
+        roomOwnerName: String(payload?.roomOwnerName || payload?.roomNumber || "").trim(),
+        phone: String(payload?.phone || "").trim(),
+        email: String(payload?.email || payload?.userId?.email || "").trim(),
+        joiningDate: formatDate(payload?.joiningDate, ""),
+        status: payload?.status === "Inactive" ? "Inactive" : "Active",
+        mealPlan: ["Lunch", "Dinner", "Both"].includes(payload?.mealPlan)
+          ? payload.mealPlan
+          : "Lunch",
+      });
     } catch (err) {
       Alert.alert(
         "Error",
@@ -137,6 +176,28 @@ export default function MemberDetails() {
     }
   }, [memberIdValue, monthParam, language]);
 
+  const fetchMonthlyDue = useCallback(async () => {
+    if (!memberIdValue) return;
+    try {
+      const res = await api.get(`/api/members/${memberIdValue}/monthly-due`, {
+        params: { month: monthParam },
+      });
+      setMonthlyDue(Number(res?.data?.due || 0));
+    } catch (_err) {
+      setMonthlyDue(0);
+    }
+  }, [memberIdValue, monthParam]);
+
+  const fetchTotalMonthlyDue = useCallback(async () => {
+    if (!memberIdValue) return;
+    try {
+      const res = await api.get(`/api/members/${memberIdValue}/monthly-due-total`);
+      setTotalMonthlyDue(Number(res?.data?.totalDue || 0));
+    } catch (_err) {
+      setTotalMonthlyDue(0);
+    }
+  }, [memberIdValue]);
+
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       router.replace("/");
@@ -148,8 +209,16 @@ export default function MemberDetails() {
   useEffect(() => {
     if (isAuthenticated && memberIdValue) {
       fetchLeaveCalendar();
+      fetchMonthlyDue();
+      fetchTotalMonthlyDue();
     }
-  }, [isAuthenticated, memberIdValue, fetchLeaveCalendar]);
+  }, [
+    isAuthenticated,
+    memberIdValue,
+    fetchLeaveCalendar,
+    fetchMonthlyDue,
+    fetchTotalMonthlyDue,
+  ]);
 
   useEffect(() => {
     if (!isValidMonthDate(monthDate)) {
@@ -179,12 +248,185 @@ export default function MemberDetails() {
   );
   const canGoPrev = !minMonth || monthDate > minMonth;
   const canGoNext = !maxMonth || monthDate < maxMonth;
+  const updateForm = (key, value) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+  const onSave = async () => {
+    const payload = {
+      name: String(form.name || "").trim(),
+      roomOwnerName: String(form.roomOwnerName || "").trim(),
+      phone: String(form.phone || "").trim(),
+      email: String(form.email || "").trim(),
+      joiningDate: String(form.joiningDate || "").trim(),
+      status: form.status === "Inactive" ? "Inactive" : "Active",
+      mealPlan: ["Lunch", "Dinner", "Both"].includes(form.mealPlan)
+        ? form.mealPlan
+        : "Lunch",
+    };
+    if (!payload.name || !payload.roomOwnerName) {
+      Alert.alert(
+        language === "en" ? "Validation error" : "तपासणी त्रुटी",
+        language === "en"
+          ? "Name and room owner are required."
+          : "नाव आणि रूम मालक आवश्यक आहेत."
+      );
+      return;
+    }
+    try {
+      setSaving(true);
+      await api.put(`/api/members/${memberIdValue}`, payload);
+      setIsEditing(false);
+      await fetchMemberDetails();
+      Alert.alert(
+        language === "en" ? "Updated" : "अपडेट झाले",
+        language === "en"
+          ? "Member details updated successfully."
+          : "सदस्य तपशील यशस्वीरित्या अपडेट झाले."
+      );
+    } catch (err) {
+      Alert.alert(
+        language === "en" ? "Error" : "त्रुटी",
+        err?.response?.data?.message ||
+          (language === "en"
+            ? "Failed to update member details."
+            : "सदस्य तपशील अपडेट करता आले नाहीत.")
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  const onCancelEdit = () => {
+    setIsEditing(false);
+    setForm({
+      name: String(member?.name || "").trim(),
+      roomOwnerName: String(member?.roomOwnerName || member?.roomNumber || "").trim(),
+      phone: String(member?.phone || "").trim(),
+      email: String(member?.email || member?.userId?.email || "").trim(),
+      joiningDate: formatDate(member?.joiningDate, ""),
+      status: member?.status === "Inactive" ? "Inactive" : "Active",
+      mealPlan: ["Lunch", "Dinner", "Both"].includes(member?.mealPlan)
+        ? member.mealPlan
+        : "Lunch",
+    });
+  };
+  const confirmDelete = () => {
+    Alert.alert(
+      language === "en" ? "Delete member?" : "सदस्य हटवायचा?",
+      language === "en"
+        ? "This action cannot be undone."
+        : "ही क्रिया पूर्ववत करता येणार नाही.",
+      [
+        {
+          text: language === "en" ? "Cancel" : "रद्द करा",
+          style: "cancel",
+        },
+        {
+          text: language === "en" ? "Delete" : "हटवा",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setDeleting(true);
+              await api.delete(`/api/members/${memberIdValue}`);
+              Alert.alert(
+                language === "en" ? "Deleted" : "हटवले",
+                language === "en"
+                  ? "Member deleted successfully."
+                  : "सदस्य यशस्वीरित्या हटवला."
+              );
+              router.replace("/Admin/ManageMembers");
+            } catch (err) {
+              Alert.alert(
+                language === "en" ? "Error" : "त्रुटी",
+                err?.response?.data?.message ||
+                  (language === "en"
+                    ? "Failed to delete member."
+                    : "सदस्य हटवता आला नाही.")
+              );
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
   const cellSize = useMemo(() => {
     const horizontalOuterPadding = 16 * 2;
     const cardInnerPadding = 16 * 2;
     const usableWidth = Math.max(screenWidth - horizontalOuterPadding - cardInnerPadding, 280);
     return Math.floor(usableWidth / 7);
   }, [screenWidth]);
+  const onToggleCalendarDay = useCallback(
+    async (dateKey, nextInactive) => {
+      if (!dateKey || calendarDayUpdating) return;
+      const previous = leaveDates;
+      setLeaveDates((prev) => {
+        const set = new Set(prev || []);
+        if (nextInactive) set.add(dateKey);
+        else set.delete(dateKey);
+        return Array.from(set).sort();
+      });
+      try {
+        setCalendarDayUpdating(dateKey);
+        const res = await api.put(`/api/leave/member/${memberIdValue}/calendar-day`, {
+          date: dateKey,
+          inactive: nextInactive,
+        });
+        if (Number.isFinite(Number(res?.data?.due))) {
+          setMonthlyDue(Number(res.data.due));
+        }
+        if (Number.isFinite(Number(res?.data?.totalDue))) {
+          setTotalMonthlyDue(Number(res.data.totalDue));
+        }
+        const nextMemberStatus =
+          res?.data?.memberStatus === "Inactive" ? "Inactive" : "Active";
+        const nextMemberStatusMr = String(res?.data?.memberStatusMr || "").trim();
+        setMember((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: nextMemberStatus,
+                statusMr: nextMemberStatusMr || prev.statusMr || "",
+              }
+            : prev
+        );
+        setForm((prev) => ({ ...prev, status: nextMemberStatus }));
+      } catch (err) {
+        setLeaveDates(previous);
+        Alert.alert(
+          language === "en" ? "Error" : "त्रुटी",
+          err?.response?.data?.message ||
+            (language === "en"
+              ? "Failed to update calendar day."
+              : "कॅलेंडर दिवस अपडेट करता आला नाही.")
+        );
+      } finally {
+        setCalendarDayUpdating("");
+      }
+    },
+    [calendarDayUpdating, language, leaveDates, memberIdValue]
+  );
+
+  const onRefresh = useCallback(async () => {
+    if (!memberIdValue) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        fetchMemberDetails(),
+        fetchLeaveCalendar(),
+        fetchMonthlyDue(),
+        fetchTotalMonthlyDue(),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [
+    memberIdValue,
+    fetchMemberDetails,
+    fetchLeaveCalendar,
+    fetchMonthlyDue,
+    fetchTotalMonthlyDue,
+  ]);
 
   if (authLoading || !isAuthenticated || loading) {
     return (
@@ -207,10 +449,27 @@ export default function MemberDetails() {
         <Text style={styles.title} numberOfLines={1}>
           {language === "en" ? "Member Profile" : "सदस्य प्रोफाइल"}
         </Text>
-        <View style={styles.headerRight} />
+        <TouchableOpacity
+          style={styles.headerActionButton}
+          onPress={() => (isEditing ? onCancelEdit() : setIsEditing(true))}
+          activeOpacity={0.7}
+          disabled={saving || deleting}
+        >
+          <Ionicons
+            name={isEditing ? "close-outline" : "create-outline"}
+            size={20}
+            color="#111827"
+          />
+        </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+      >
         <View style={styles.profileCard}>
           <View style={styles.avatarCircle}>
             <Ionicons name="person" size={22} color="#111827" />
@@ -236,6 +495,10 @@ export default function MemberDetails() {
                 {displayStatusMr(language, member?.status || "Active", member?.statusMr)}
               </Text>
             </View>
+            <Text style={styles.totalDueText}>
+              {language === "en" ? "Total Due: " : "एकूण बाकी: "}
+              {formatCurrency(totalMonthlyDue)}
+            </Text>
           </View>
         </View>
 
@@ -243,39 +506,143 @@ export default function MemberDetails() {
           <Text style={styles.cardTitle}>
             {language === "en" ? "Details" : "तपशील"}
           </Text>
-          <View style={styles.compactLine}>
-            <Text style={styles.compactText}>
-              {language === "en" ? "Room Owner" : "रूम मालक"}: {roomOwner}
-            </Text>
-            <Text style={styles.compactSeparator}>|</Text>
-            <Text style={styles.compactText}>
-              {language === "en" ? "Meal Plan" : "जेवण योजना"}:{" "}
-              {displayMealPlanMr(language, member?.mealPlan || "Lunch", member?.mealPlanMr)}
-            </Text>
-          </View>
-          <View style={styles.compactLine}>
-            <Text style={styles.compactText}>
-              {language === "en" ? "Phone" : "फोन"}: {member?.phone || "-"}
-            </Text>
-            <Text style={styles.compactSeparator}>|</Text>
-            <Text style={styles.compactText}>
-              {language === "en" ? "Joining Date" : "जॉइनिंग तारीख"}:{" "}
-              {formatDate(member?.joiningDate)}
-            </Text>
-          </View>
-          <View style={styles.compactLine}>
-            <Text style={styles.compactText}>
-              {language === "en" ? "Email" : "ईमेल"}:{" "}
-              {member?.email || member?.userId?.email || "-"}
-            </Text>
-          </View>
+          {isEditing ? (
+            <View style={styles.editWrap}>
+              <TextInput
+                style={styles.input}
+                placeholder={language === "en" ? "Member name" : "सदस्य नाव"}
+                value={form.name}
+                onChangeText={(v) => updateForm("name", v)}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder={language === "en" ? "Room owner name" : "रूम मालक नाव"}
+                value={form.roomOwnerName}
+                onChangeText={(v) => updateForm("roomOwnerName", v)}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder={language === "en" ? "Phone" : "फोन"}
+                value={form.phone}
+                onChangeText={(v) => updateForm("phone", v)}
+                keyboardType="phone-pad"
+              />
+              <TextInput
+                style={styles.input}
+                placeholder={language === "en" ? "Email" : "ईमेल"}
+                value={form.email}
+                onChangeText={(v) => updateForm("email", v)}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+              <TextInput
+                style={[styles.input, styles.readonlyInput]}
+                placeholder={language === "en" ? "Joining date (YYYY-MM-DD)" : "जॉइनिंग तारीख (YYYY-MM-DD)"}
+                value={form.joiningDate}
+                editable={false}
+              />
+              <View style={styles.quickRow}>
+                <TouchableOpacity style={[styles.pillButton, styles.readonlyPillButton]} disabled activeOpacity={1}>
+                  <Text style={styles.pillButtonText}>
+                    {(language === "en" ? "Meal Plan: " : "जेवण योजना: ") + form.mealPlan}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.pillButton, styles.readonlyPillButton]} disabled activeOpacity={1}>
+                  <Text style={styles.pillButtonText}>
+                    {(language === "en" ? "Status: " : "स्थिती: ") + form.status}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.actionsRow}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.saveButton, saving && styles.actionDisabled]}
+                  onPress={onSave}
+                  disabled={saving || deleting}
+                >
+                  <Text style={styles.actionButtonText}>
+                    {saving
+                      ? language === "en"
+                        ? "Saving..."
+                        : "सेव्ह होत आहे..."
+                      : language === "en"
+                      ? "Save"
+                      : "सेव्ह करा"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.cancelButton]}
+                  onPress={onCancelEdit}
+                  disabled={saving || deleting}
+                >
+                  <Text style={styles.actionButtonText}>
+                    {language === "en" ? "Cancel" : "रद्द करा"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.compactLine}>
+                <Text style={styles.compactText}>
+                  {language === "en" ? "Room Owner" : "रूम मालक"}: {roomOwner}
+                </Text>
+                <Text style={styles.compactSeparator}>|</Text>
+                <Text style={styles.compactText}>
+                  {language === "en" ? "Meal Plan" : "जेवण योजना"}:{" "}
+                  {displayMealPlanMr(language, member?.mealPlan || "Lunch", member?.mealPlanMr)}
+                </Text>
+              </View>
+              <View style={styles.compactLine}>
+                <Text style={styles.compactText}>
+                  {language === "en" ? "Phone" : "फोन"}: {member?.phone || "-"}
+                </Text>
+                <Text style={styles.compactSeparator}>|</Text>
+                <Text style={styles.compactText}>
+                  {language === "en" ? "Joining Date" : "जॉइनिंग तारीख"}:{" "}
+                  {formatDate(member?.joiningDate)}
+                </Text>
+              </View>
+              <View style={styles.compactLine}>
+                <Text style={styles.compactText}>
+                  {language === "en" ? "Email" : "ईमेल"}:{" "}
+                  {member?.email || member?.userId?.email || "-"}
+                </Text>
+                <Text style={styles.compactSeparator}>|</Text>
+                <Text style={styles.compactText}>
+                  {language === "en" ? "mealAmt" : "चार्ज केलेली रक्कम"}:{" "}
+                  {formatCurrency(member?.mealPlanPrice)}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.deleteButton, deleting && styles.actionDisabled]}
+                onPress={confirmDelete}
+                disabled={deleting || saving}
+              >
+                <Text style={styles.deleteButtonText}>
+                  {deleting
+                    ? language === "en"
+                      ? "Deleting..."
+                      : "हटवत आहे..."
+                    : language === "en"
+                    ? "Delete Member"
+                    : "सदस्य हटवा"}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         <View style={styles.card}>
           <View style={styles.calendarHeader}>
-            <Text style={styles.cardTitle}>
-              {language === "en" ? "Activity Calendar" : "क्रियाकलाप कॅलेंडर"}
-            </Text>
+            <View>
+              <Text style={styles.cardTitle}>
+                {language === "en" ? "Activity Calendar" : "क्रियाकलाप कॅलेंडर"}
+              </Text>
+              <Text style={styles.monthDueText}>
+                {language === "en" ? "Monthly Due: " : "मासिक बाकी: "}
+                {formatCurrency(monthlyDue)}
+              </Text>
+            </View>
             <View style={styles.monthNav}>
               <TouchableOpacity
                 style={[styles.monthButton, !canGoPrev && styles.monthButtonDisabled]}
@@ -329,15 +696,19 @@ export default function MemberDetails() {
                 const dateKey = formatDate(cell, "");
                 const isLeave = leaveDateSet.has(dateKey);
                 const isFuture = cell > new Date();
+                const isUpdatingCell = calendarDayUpdating === dateKey;
                 return (
-                  <View
+                  <TouchableOpacity
                     key={dateKey}
                     style={[
                       styles.cell,
                       { width: cellSize, height: cellSize },
                       isLeave ? styles.inactiveDayCell : styles.activeDayCell,
                       isFuture && styles.futureDayCell,
+                      isUpdatingCell && styles.dayUpdatingCell,
                     ]}
+                    disabled={!isEditing || isFuture || !!calendarDayUpdating}
+                    onPress={() => onToggleCalendarDay(dateKey, !isLeave)}
                   >
                     <Text
                       style={[
@@ -348,14 +719,18 @@ export default function MemberDetails() {
                     >
                       {cell.getDate()}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
             </View>
           )}
           <Text style={styles.legend}>
             {language === "en"
-              ? "Green = active day, Red = inactive leave day."
+              ? isEditing
+                ? "Edit mode: tap a day to toggle leave. Green = active, Red = leave."
+                : "Green = active day, Red = inactive leave day."
+              : isEditing
+              ? "एडिट मोड: दिवसावर टॅप करून रजा बदला. हिरवा = सक्रिय, लाल = रजा."
               : "हिरवा = सक्रिय दिवस, लाल = निष्क्रिय रजा दिवस."}
           </Text>
         </View>
@@ -396,8 +771,13 @@ const styles = StyleSheet.create({
     color: "#111827",
     textAlign: "center",
   },
-  headerRight: {
+  headerActionButton: {
     width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F3F4F6",
   },
   content: {
     padding: 16,
@@ -508,6 +888,82 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
     fontWeight: "700",
   },
+  editWrap: {
+    marginTop: 8,
+    gap: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#111827",
+  },
+  readonlyInput: {
+    backgroundColor: "#F3F4F6",
+    color: "#6B7280",
+  },
+  quickRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  pillButton: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: "#F9FAFB",
+  },
+  readonlyPillButton: {
+    backgroundColor: "#F3F4F6",
+    borderColor: "#E5E7EB",
+  },
+  pillButtonText: {
+    fontSize: 13,
+    color: "#111827",
+    fontWeight: "600",
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  actionButton: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  saveButton: {
+    backgroundColor: "#16A34A",
+  },
+  cancelButton: {
+    backgroundColor: "#6B7280",
+  },
+  actionButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  actionDisabled: {
+    opacity: 0.7,
+  },
+  deleteButton: {
+    marginTop: 12,
+    borderRadius: 10,
+    backgroundColor: "#DC2626",
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  deleteButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
   calendarHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -568,6 +1024,9 @@ const styles = StyleSheet.create({
   futureDayCell: {
     backgroundColor: "#F9FAFB",
   },
+  dayUpdatingCell: {
+    opacity: 0.6,
+  },
   cellText: {
     fontSize: 12,
     color: "#374151",
@@ -588,5 +1047,16 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 12,
     color: "#6B7280",
+  },
+  monthDueText: {
+    fontSize: 12,
+    color: "#4B5563",
+    fontWeight: "600",
+  },
+  totalDueText: {
+    marginTop: 8,
+    fontSize: 13,
+    color: "#111827",
+    fontWeight: "700",
   },
 });

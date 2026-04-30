@@ -4,11 +4,12 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SectionList,
   FlatList,
   ActivityIndicator,
   Alert,
   Linking,
+  Modal,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -31,6 +32,8 @@ const LeaveApproval = () => {
   const [leaves, setLeaves] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
+  const [historyModalVisible, setHistoryModalVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchLeaves = useCallback(async () => {
     try {
@@ -81,6 +84,15 @@ const LeaveApproval = () => {
     }
   }, [authLoading, isAuthenticated, fetchLeaves]);
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchLeaves();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchLeaves]);
+
   const updateStatus = async (id, status) => {
     try {
       setUpdatingId(id);
@@ -106,21 +118,43 @@ const LeaveApproval = () => {
 
   const pendingLeaves = leaves.filter((l) => l.status === "Pending");
   const historyLeaves = leaves.filter((l) => l.status !== "Pending");
+  const getMemberDisplayName = useCallback(
+    (item) => {
+      const unknownMemberText =
+        language === "en" ? "Unknown Member" : "अज्ञात सदस्य";
+
+      if (language === "mr") {
+        return (
+          item.studentNameMr ||
+          item.memberNameMr ||
+          item.memberId?.nameMr ||
+          item.studentId?.nameMr ||
+          item.memberName ||
+          item.studentName ||
+          item.memberId?.name ||
+          item.studentId?.name ||
+          unknownMemberText
+        );
+      }
+
+      return (
+        item.studentName ||
+        item.memberName ||
+        item.memberId?.name ||
+        item.studentId?.name ||
+        item.studentNameMr ||
+        item.memberNameMr ||
+        item.memberId?.nameMr ||
+        item.studentId?.nameMr ||
+        unknownMemberText
+      );
+    },
+    [language]
+  );
 
   const renderHistoryItem = ({ item }) => {
     const statusStyle = STATUS_COLORS[item.status] || STATUS_COLORS.Pending;
-    const unknownMemberText =
-      language === "en" ? "Unknown Member" : "अज्ञात सदस्य";
-    const studentName =
-      language === "mr"
-        ? item.studentNameMr ||
-          item.memberId?.nameMr ||
-          item.studentId?.nameMr ||
-          unknownMemberText
-        : item.studentName ||
-          item.memberId?.name ||
-          item.studentId?.name ||
-          unknownMemberText;
+    const studentName = getMemberDisplayName(item);
 
     const inactiveDays = Number(item.currentInactiveDays || 0);
     const isChargeableLeave = inactiveDays > 0;
@@ -224,32 +258,7 @@ const LeaveApproval = () => {
 
   const renderLeaveItem = ({ item }) => {
     const statusStyle = STATUS_COLORS[item.status] || STATUS_COLORS.Pending;
-    const unknownMemberText =
-      language === "en" ? "Unknown Member" : "अज्ञात सदस्य";
-    const studentName =
-      language === "mr"
-        ? item.studentNameMr ||
-          item.memberId?.nameMr ||
-          item.studentId?.nameMr ||
-          unknownMemberText
-        : item.studentName ||
-          item.memberId?.name ||
-          item.studentId?.name ||
-          unknownMemberText;
-    const roomNumber =
-      language === "mr"
-        ? item.memberId?.roomOwnerNameMr ||
-          item.studentId?.roomOwnerNameMr ||
-          item.memberId?.roomOwnerName ||
-          item.studentId?.roomOwnerName ||
-          item.roomNumber ||
-          (language === "en" ? "N/A" : "उपलब्ध नाही")
-        : item.roomNumber ||
-          item.memberId?.roomOwnerName ||
-          item.memberId?.roomNumber ||
-          item.studentId?.roomOwnerName ||
-          item.studentId?.roomNumber ||
-          (language === "en" ? "N/A" : "उपलब्ध नाही");
+    const studentName = getMemberDisplayName(item);
 
     const phone = item.memberId?.phone || item.studentId?.phone;
 
@@ -271,10 +280,9 @@ const LeaveApproval = () => {
     return (
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>{studentName}</Text>
-            <Text style={styles.cardSubtitle}>
-              {language === "en" ? "Room Owner" : "रूम मालक"}: {roomNumber}
+          <View style={styles.cardHeaderLeft}>
+            <Text style={styles.cardTitle} numberOfLines={2}>
+              {studentName}
             </Text>
             {isActivation && (
               <Text style={styles.cardTag}>
@@ -284,17 +292,36 @@ const LeaveApproval = () => {
               </Text>
             )}
           </View>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: statusStyle.bg },
-            ]}
-          >
-            <Text
-              style={[styles.statusText, { color: statusStyle.text }]}
+          <View style={styles.cardHeaderRight}>
+            <View
+              style={[
+                styles.statusBadge,
+                { backgroundColor: statusStyle.bg },
+              ]}
             >
-              {item.status}
-            </Text>
+              <Text
+                style={[styles.statusText, { color: statusStyle.text }]}
+                numberOfLines={1}
+              >
+                {item.status}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.approveIconButton,
+                (item.status === "Approved" || updatingId === item._id) &&
+                  styles.actionButtonDisabled,
+              ]}
+              onPress={() => updateStatus(item._id, "Approved")}
+              disabled={item.status === "Approved" || updatingId === item._id}
+              activeOpacity={0.8}
+            >
+              {updatingId === item._id ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+              )}
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -351,18 +378,6 @@ const LeaveApproval = () => {
                 )}
           </>
         )}
-        {!!(language === "mr" ? item.reasonMr || item.reason : item.reason) && (
-          <View style={styles.row}>
-            <Ionicons name="chatbubble-ellipses-outline" size={16} color="#6B7280" />
-            <Text style={styles.rowLabel}>
-              {language === "en" ? "Reason" : "कारण"}:
-            </Text>
-            <Text style={styles.rowValue} numberOfLines={3}>
-              {language === "mr" ? item.reasonMr || item.reason : item.reason}
-            </Text>
-          </View>
-        )}
-
         <View style={styles.actions}>
           <TouchableOpacity
             style={[styles.actionButton, styles.callButton]}
@@ -373,28 +388,6 @@ const LeaveApproval = () => {
             <Text style={styles.actionText}>
               {language === "en" ? "Call" : "कॉल करा"}
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.actionButton,
-              styles.approveButton,
-              (item.status === "Approved" || updatingId === item._id) &&
-                styles.actionButtonDisabled,
-            ]}
-            onPress={() => updateStatus(item._id, "Approved")}
-            disabled={item.status === "Approved" || updatingId === item._id}
-            activeOpacity={0.8}
-          >
-            {updatingId === item._id ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                <Text style={styles.actionText}>
-                  {language === "en" ? "Approve" : "मंजूर करा"}
-                </Text>
-              </>
-            )}
           </TouchableOpacity>
           <TouchableOpacity
             style={[
@@ -446,7 +439,13 @@ const LeaveApproval = () => {
         <Text style={styles.title}>
           {language === "en" ? "Leave Approvals" : "रजा मंजुरी"}
         </Text>
-        <View style={styles.headerRight} />
+        <TouchableOpacity
+          style={styles.historyIconButton}
+          onPress={() => setHistoryModalVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="time-outline" size={22} color="#111827" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -454,65 +453,75 @@ const LeaveApproval = () => {
           <ActivityIndicator size="large" color="#111827" />
         </View>
       ) : (
-        <SectionList
-          sections={[
-            {
-              key: "pending",
-              title: language === "en" ? "Pending" : "प्रलंबित",
-              data: pendingLeaves,
-              emptyText:
-                language === "en"
-                  ? "No pending leave requests."
-                  : "कोणत्याही प्रलंबित रजा विनंत्या नाहीत.",
-              showWhenEmpty: true,
-            },
-            {
-              key: "history",
-              title: language === "en" ? "History" : "इतिहास",
-              data: historyLeaves,
-              showWhenEmpty: false,
-            },
-          ]}
+        <FlatList
+          data={pendingLeaves}
           keyExtractor={(item) => item._id}
-          renderItem={({ item, section }) =>
-            section.key === "history"
-              ? renderHistoryItem({ item })
-              : renderLeaveItem({ item })
-          }
-          renderSectionHeader={({ section }) =>
-            section.data.length > 0 || section.showWhenEmpty ? (
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>{section.title}</Text>
-              </View>
-            ) : null
+          renderItem={renderLeaveItem}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons name="calendar-outline" size={64} color="#D1D5DB" />
               <Text style={styles.emptyText}>
                 {language === "en"
-                  ? "No leave requests."
-                  : "कोणत्याही रजा विनंत्या नाहीत."}
+                  ? "No pending leave requests."
+                  : "कोणत्याही प्रलंबित रजा विनंत्या नाहीत."}
               </Text>
             </View>
           }
-          ListHeaderComponent={null}
-          ListFooterComponent={
-            pendingLeaves.length === 0 ? (
-              <View style={styles.sectionEmptyBox}>
-                <Text style={styles.sectionEmptyText}>
-                  {language === "en"
-                    ? "No pending leave requests."
-                    : "कोणत्याही प्रलंबित रजा विनंत्या नाहीत."}
-                </Text>
-              </View>
-            ) : null
-          }
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
-          stickySectionHeadersEnabled
         />
       )}
+
+      <Modal
+        visible={historyModalVisible}
+        animationType="slide"
+        onRequestClose={() => setHistoryModalVisible(false)}
+      >
+        <SafeAreaView style={styles.historyScreen}>
+          <View style={styles.historyHeader}>
+            <Text style={styles.historyTitle}>
+              {language === "en" ? "Leave History" : "रजा इतिहास"}
+            </Text>
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setHistoryModalVisible(false)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={26} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
+
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#111827" />
+            </View>
+          ) : (
+            <FlatList
+              data={historyLeaves}
+              keyExtractor={(item) => item._id}
+              renderItem={renderHistoryItem}
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+              }
+              contentContainerStyle={styles.historyListContent}
+              ListEmptyComponent={
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="calendar-outline" size={64} color="#D1D5DB" />
+                  <Text style={styles.emptyText}>
+                    {language === "en"
+                      ? "No history found."
+                      : "कोणताही इतिहास आढळला नाही."}
+                  </Text>
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -543,8 +552,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#111827",
   },
-  headerRight: {
+  historyIconButton: {
     width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
   },
   loadingContainer: {
     flex: 1,
@@ -555,6 +567,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     paddingBottom: 100,
+  },
+  historyScreen: {
+    flex: 1,
+    backgroundColor: "#F3F4F6",
+  },
+  historyHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  historyTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  historyListContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 20,
   },
   sectionHeader: {
     backgroundColor: "#F3F4F6",
@@ -584,9 +621,20 @@ const styles = StyleSheet.create({
   },
   cardHeader: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     marginBottom: 10,
+    gap: 10,
+  },
+  cardHeaderLeft: {
+    flex: 1,
+    minWidth: 0,
+  },
+  cardHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
   },
   cardTitle: {
     fontSize: 16,
@@ -650,8 +698,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
   },
-  approveButton: {
+  approveIconButton: {
+    marginLeft: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 999,
     backgroundColor: "#16A34A",
+    alignItems: "center",
+    justifyContent: "center",
   },
   rejectButton: {
     backgroundColor: "#DC2626",
@@ -676,15 +730,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#6B7280",
     marginTop: 16,
-  },
-  sectionEmptyBox: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  sectionEmptyText: {
-    fontSize: 13,
-    color: "#6B7280",
-    textAlign: "center",
   },
   historyCard: {
     backgroundColor: "#FFFFFF",
@@ -721,5 +766,6 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     fontWeight: "600",
   },
+  modalClose: { padding: 4 },
 });
 
