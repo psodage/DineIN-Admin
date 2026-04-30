@@ -48,6 +48,12 @@ const toYearMonthValue = (value) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
+const getRemainingDue = (row) => {
+  const due = Number(row?.due ?? row?.dueAmount ?? row?.remainingAmount ?? 0);
+  const collected = Number(row?.collected ?? row?.paidAmount ?? 0);
+  return Math.max(0, Math.max(0, due) - Math.max(0, collected));
+};
+
 const Payments = () => {
   const router = useRouter();
   const { loading: authLoading, isAuthenticated } = useAuth();
@@ -540,7 +546,7 @@ const Payments = () => {
       if (months.length > 0) {
         const firstMonth = months[0];
         setSelectedDueMonth(toYearMonthValue(firstMonth.month));
-        setSelectedMonthDue(Number(firstMonth?.due || 0));
+        setSelectedMonthDue(getRemainingDue(firstMonth));
       } else {
         setSelectedDueMonth(null);
         setSelectedMonthDue(0);
@@ -568,7 +574,7 @@ const Payments = () => {
       const res = await api.get(`/api/members/${selectedMember._id}/monthly-due`, {
         params: { month: monthValue },
       });
-      setSelectedMonthDue(Number(res?.data?.due || 0));
+      setSelectedMonthDue(getRemainingDue(res?.data || {}));
     } catch (err) {
       Alert.alert("Error", err?.response?.data?.message || "Failed to load month due");
       setSelectedMonthDue(0);
@@ -1012,7 +1018,10 @@ const Payments = () => {
                         <Text style={styles.pickerOptionText}>
                           {(() => {
                             const d = new Date(m.month);
-                            return `${getMonthLabel(d.getFullYear() * 12 + d.getMonth(), language)} (${formatCurrency(m.due)})`;
+                            return `${getMonthLabel(
+                              d.getFullYear() * 12 + d.getMonth(),
+                              language
+                            )} (${formatCurrency(getRemainingDue(m))})`;
                           })()}
                         </Text>
                       </TouchableOpacity>
