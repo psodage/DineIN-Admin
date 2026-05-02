@@ -17,13 +17,13 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://dinein-backend-d040.onrender.com"
+        "EXPO_PUBLIC_API_BASE_URL": "https://dinein-admin.onrender.com"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://dinein-backend-d040.onrender.com"
+        "EXPO_PUBLIC_API_BASE_URL": "https://dinein-admin.onrender.com"
       }
     }
   },

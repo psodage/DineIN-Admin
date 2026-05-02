@@ -217,6 +217,9 @@ router.get("/:id/due", async (req, res) => {
 router.get("/:id/monthly-due", async (req, res) => {
   try {
     const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid member id" });
+    }
     const bounds =
       getMonthBounds(req.query.month) ||
       (() => {
@@ -232,27 +235,25 @@ router.get("/:id/monthly-due", async (req, res) => {
         );
         return { monthStart: nowStart, monthEnd: nowEnd };
       })();
-    const { monthStart, monthEnd } = bounds;
-    const rows = await MemberMonthlyDue.find({
-      memberId: id,
-      month: { $gte: monthStart, $lt: monthEnd },
-    })
-      .select("due collected status month updatedAt")
-      .lean();
-    const latestRows = pickLatestDueByMonth(rows);
-    const row = latestRows[0] || null;
+    const { monthStart } = bounds;
 
-    const dueFromMonthlyDue = Math.max(0, Number(row?.due || 0));
-    const collectedFromMonthlyDue = Math.max(0, Number(row?.collected || 0));
-    const remainingForMonth = Math.max(0, dueFromMonthlyDue - collectedFromMonthlyDue);
+    // Source of truth: billing. Cache `due` already stores remaining balance (not gross bill);
+    // subtracting `collected` again was double-counting payments.
+    const billing = await calculateMemberBilling(id, monthStart);
+    if (!billing) {
+      return res.status(404).json({ message: "Member not found" });
+    }
+
+    const remainingForMonth = Math.max(0, Number(billing.remainingAmount || 0));
+    const paidForMonth = Math.max(0, Number(billing.paidAmount || 0));
 
     return res.json({
       memberId: id,
       month: monthStart,
       due: remainingForMonth,
-      paidForMonth: collectedFromMonthlyDue,
+      paidForMonth,
       remainingForMonth,
-      status: remainingForMonth <= 0 ? "Paid" : row?.status || "Pending",
+      status: remainingForMonth <= 0 ? "Paid" : billing.status || "Pending",
     });
   } catch (error) {
     console.error("Get member monthly due error:", error);
@@ -273,22 +274,29 @@ router.get("/:id/monthly-due-months", async (req, res) => {
       .select("month due collected status updatedAt")
       .sort({ month: 1 })
       .lean();
-    const latestRows = pickLatestDueByMonth(rows)
-      .map((row) => {
-        const due = Math.max(0, Number(row?.due || 0));
-        const collected = Math.max(0, Number(row?.collected || 0));
-        const remaining = Math.max(0, due - collected);
-        return { ...row, due, collected, remaining };
+    const latestRows = pickLatestDueByMonth(rows);
+    const withRemaining = await Promise.all(
+      latestRows.map(async (row) => {
+        const monthStart = toMonthStart(row?.month);
+        if (!monthStart) return null;
+        const billing = await calculateMemberBilling(id, monthStart);
+        if (!billing) return null;
+        const remaining = Math.max(0, Number(billing.remainingAmount || 0));
+        return { row, monthStart, remaining };
       })
-      .filter((row) => row.remaining > 0);
+    );
+    const monthsPayload = withRemaining
+      .filter(Boolean)
+      .filter((x) => x.remaining > 0)
+      .map((x) => ({
+        month: x.row.month,
+        due: x.remaining,
+        status: x.remaining <= 0 ? "Paid" : x.row?.status || "Pending",
+      }));
 
     return res.json({
       memberId: id,
-      months: latestRows.map((row) => ({
-        month: row.month,
-        due: row.remaining,
-        status: row.remaining <= 0 ? "Paid" : row?.status || "Pending",
-      })),
+      months: monthsPayload,
     });
   } catch (error) {
     console.error("Get member monthly due months error:", error);
@@ -308,12 +316,15 @@ router.get("/:id/monthly-due-total", async (req, res) => {
       .select("month due collected updatedAt")
       .lean();
     const latestRows = pickLatestDueByMonth(rows);
-    const totalDue = latestRows.reduce((sum, row) => {
-      const due = Math.max(0, Number(row?.due || 0));
-      const collected = Math.max(0, Number(row?.collected || 0));
-      const remaining = Math.max(0, due - collected);
-      return remaining > 0 ? sum + remaining : sum;
-    }, 0);
+    const remainings = await Promise.all(
+      latestRows.map(async (row) => {
+        const monthStart = toMonthStart(row?.month);
+        if (!monthStart) return 0;
+        const billing = await calculateMemberBilling(id, monthStart);
+        return billing ? Math.max(0, Number(billing.remainingAmount || 0)) : 0;
+      })
+    );
+    const totalDue = remainings.reduce((sum, r) => sum + r, 0);
     return res.json({
       memberId: id,
       totalDue,

@@ -949,7 +949,13 @@ router.get("/all", async (req, res) => {
       }).lean();
 
       const statMap = new Map(
-        stats.map((s) => [String(s.memberId), Number(s.inactiveDays || 0)])
+        stats.map((s) => [
+          String(s.memberId),
+          {
+            inactiveDays: Number(s.inactiveDays || 0),
+            currentStreak: Number(s.currentStreak || 0),
+          },
+        ])
       );
 
       leaves = leaves.map((l) => {
@@ -959,12 +965,62 @@ router.get("/all", async (req, res) => {
             : l.memberId
           : null;
         const key = sid ? String(sid) : null;
+        const stat = key ? statMap.get(key) : null;
         return {
           ...l,
-          currentInactiveDays: key ? statMap.get(key) || 0 : 0,
+          currentInactiveDays: stat ? stat.inactiveDays : 0,
+          leaveStatCurrentStreak: stat ? stat.currentStreak : 0,
         };
       });
     }
+
+    const activationMemberIds = Array.from(
+      new Set(
+        leaves
+          .filter((l) => l.type === "Activation")
+          .map((l) => {
+            if (!l.memberId) return null;
+            return l.memberId._id ? l.memberId._id : l.memberId;
+          })
+          .filter((id) => !!id)
+          .map((id) => String(id))
+      )
+    );
+
+    let latestLeaveStartByMember = new Map();
+    if (activationMemberIds.length > 0) {
+      const oidList = activationMemberIds.map(
+        (id) => new mongoose.Types.ObjectId(id)
+      );
+      const latestRows = await LeaveRequest.aggregate([
+        { $match: { memberId: { $in: oidList }, type: "Leave" } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: "$memberId",
+            startDate: { $first: "$startDate" },
+          },
+        },
+      ]);
+      latestLeaveStartByMember = new Map(
+        latestRows.map((row) => [String(row._id), row.startDate])
+      );
+    }
+
+    leaves = leaves.map((l) => {
+      if (l.type !== "Activation") return l;
+      const sid = l.memberId
+        ? l.memberId._id
+          ? l.memberId._id
+          : l.memberId
+        : null;
+      const key = sid ? String(sid) : null;
+      const latestStart = key ? latestLeaveStartByMember.get(key) : null;
+      return {
+        ...l,
+        latestLeaveStartDate: latestStart != null ? latestStart : null,
+      };
+    });
 
     res.json(leaves);
   } catch (error) {

@@ -215,53 +215,6 @@ const Payments = () => {
   const minPaymentMonth =
     earliestPaymentMonth == null ? getSelectedMonth(0) : earliestPaymentMonth;
 
-  const latestPaymentMonth = (() => {
-    let max = null;
-    for (const p of payments) {
-      const d = p.month ? new Date(p.month) : p.date ? new Date(p.date) : null;
-      if (!d || Number.isNaN(d.getTime())) continue;
-      const ym = getYearMonth(d);
-      if (!Number.isNaN(ym) && (max === null || ym > max)) {
-        max = ym;
-      }
-    }
-    return max;
-  })();
-
-  useEffect(() => {
-    if (latestPaymentMonth == null) return;
-    const selectedHasPayments = payments.some((p) => {
-      const d = p.month ? new Date(p.month) : p.date ? new Date(p.date) : null;
-      if (!d || Number.isNaN(d.getTime())) return false;
-      return d.getFullYear() * 12 + d.getMonth() === selectedMonth;
-    });
-    if (!selectedHasPayments) {
-      setSelectedMonth(latestPaymentMonth);
-    }
-  }, [latestPaymentMonth, payments, selectedMonth]);
-
-  const monthPayments = payments
-    .filter((p) => {
-      const d = p.month ? new Date(p.month) : p.date ? new Date(p.date) : null;
-      if (!d || Number.isNaN(d.getTime())) return false;
-      const ym = d.getFullYear() * 12 + d.getMonth();
-      return ym === selectedMonth;
-    })
-    .slice()
-    .sort((a, b) => {
-      const an = (
-        language === "mr" ? a.studentNameMr || a.studentName || "" : a.studentName || ""
-      ).toLowerCase();
-      const bn = (
-        language === "mr" ? b.studentNameMr || b.studentName || "" : b.studentName || ""
-      ).toLowerCase();
-      if (an < bn) return -1;
-      if (an > bn) return 1;
-      const ad = a.date ? new Date(a.date).getTime() : 0;
-      const bd = b.date ? new Date(b.date).getTime() : 0;
-      return bd - ad;
-    });
-
   const billByMemberId = useMemo(() => {
     const map = new Map();
     for (const row of monthMemberBills || []) {

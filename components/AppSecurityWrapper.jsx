@@ -10,19 +10,9 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { BlurView } from "expo-blur";
-import * as ScreenCapture from "expo-screen-capture";
 import SplitScreenBlockedView from "./SplitScreenBlockedView";
 
 export default function AppSecurityWrapper({ children }) {
-  useEffect(() => {
-    if (Platform.OS === "web") return;
-
-    ScreenCapture.preventScreenCaptureAsync?.().catch(() => {});
-    return () => {
-      ScreenCapture.allowScreenCaptureAsync?.().catch(() => {});
-    };
-  }, []);
-
   const appState = useRef(AppState.currentState);
   const opacity = useRef(new Animated.Value(0)).current;
   const [showOverlay, setShowOverlay] = useState(false);

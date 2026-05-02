@@ -27,6 +27,31 @@ const STATUS_COLORS = {
   Rejected: { bg: "#FEE2E2", text: "#991B1B" },
 };
 
+function getLocalTodayYmd() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${day}`;
+}
+
+function normalizeMemberStatus(member) {
+  const s = String(member?.status || "Active").trim().toLowerCase();
+  if (s === "inactive") return "inactive";
+  return "active";
+}
+
+function formatLeaveYmd(value) {
+  if (value == null || value === "") return "-";
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "-";
+    return d.toISOString().split("T")[0];
+  } catch {
+    return "-";
+  }
+}
+
 const LeaveApproval = () => {
   const router = useRouter();
   const { loading: authLoading, isAuthenticated } = useAuth();
@@ -130,6 +155,20 @@ const LeaveApproval = () => {
     });
   }, [members, memberQuery]);
 
+  useEffect(() => {
+    if (!selectedMember) return;
+    const today = getLocalTodayYmd();
+    if (normalizeMemberStatus(selectedMember) === "inactive") {
+      setManualType("Activation");
+      setManualEndDate(today);
+      setManualStartDate("");
+    } else {
+      setManualType("Leave");
+      setManualStartDate(today);
+      setManualEndDate("");
+    }
+  }, [selectedMember]);
+
   const resetManualForm = useCallback(() => {
     setMemberQuery("");
     setSelectedMember(null);
@@ -159,13 +198,21 @@ const LeaveApproval = () => {
     }
     const type = manualType === "Activation" ? "Activation" : "Leave";
     const payload = { memberId: selectedMember._id, type };
+    const today = getLocalTodayYmd();
+    const statusNorm = normalizeMemberStatus(selectedMember);
 
     if (type === "Leave") {
-      if (!isValidYmd(manualStartDate)) {
+      const start =
+        statusNorm === "active" ? today : String(manualStartDate || "").trim();
+      if (!isValidYmd(start)) {
         Alert.alert("Validation", "Start date must be YYYY-MM-DD");
         return;
       }
-      payload.startDate = manualStartDate.trim();
+      if (statusNorm === "active" && start !== today) {
+        Alert.alert("Validation", language === "en" ? "Leave must start today." : "रजा आजच्या दिवसापासून सुरू होते.");
+        return;
+      }
+      payload.startDate = start;
       if (String(manualEndDate || "").trim()) {
         if (!isValidYmd(manualEndDate)) {
           Alert.alert("Validation", "End date must be YYYY-MM-DD");
@@ -174,11 +221,20 @@ const LeaveApproval = () => {
         payload.endDate = manualEndDate.trim();
       }
     } else {
-      if (!isValidYmd(manualEndDate)) {
+      const end =
+        statusNorm === "inactive" ? today : String(manualEndDate || "").trim();
+      if (!isValidYmd(end)) {
         Alert.alert("Validation", "Activation date must be YYYY-MM-DD");
         return;
       }
-      payload.endDate = manualEndDate.trim();
+      if (statusNorm === "inactive" && end !== today) {
+        Alert.alert(
+          "Validation",
+          language === "en" ? "Activation must use today as the end date." : "सक्रियकरणासाठी शेवटची तारीख आजच असावी."
+        );
+        return;
+      }
+      payload.endDate = end;
     }
 
     try {
@@ -204,6 +260,7 @@ const LeaveApproval = () => {
     manualSubmitting,
     manualType,
     selectedMember,
+    language,
   ]);
 
   const updateStatus = async (id, status) => {
@@ -269,17 +326,11 @@ const LeaveApproval = () => {
     const statusStyle = STATUS_COLORS[item.status] || STATUS_COLORS.Pending;
     const studentName = getMemberDisplayName(item);
 
-    const inactiveDays = Number(item.currentInactiveDays || 0);
-    const isChargeableLeave = inactiveDays > 0;
-    const isInactiveAccount =
-      item.memberId?.status === "Inactive" ||
-      item.studentId?.status === "Inactive";
     const isActivation = item.type === "Activation";
+    const streak = Number(item.leaveStatCurrentStreak ?? 0);
 
-    const startDate = item.startDate
-      ? new Date(item.startDate).toISOString().split("T")[0]
-      : "-";
-    const endDate = item.endDate ? new Date(item.endDate).toISOString().split("T")[0] : "-";
+    const startDate = formatLeaveYmd(item.startDate);
+    const latestPriorLeaveStart = formatLeaveYmd(item.latestLeaveStartDate);
 
     const requestLabel =
       item.type === "Activation"
@@ -308,61 +359,31 @@ const LeaveApproval = () => {
         <Text style={styles.historyReason}>
           {language === "en" ? "Reason" : "कारण"}: {requestLabel}
         </Text>
-        {isInactiveAccount && (
-          <Text style={styles.historyInactiveInfo}>
-            {language === "en"
-              ? `Inactive days this month: ${inactiveDays} / 5`
-              : `या महिन्यात निष्क्रिय दिवस: ${inactiveDays} / 5`}
-          </Text>
-        )}
 
-        {!isActivation && (
+        {isActivation ? (
+          <View style={styles.row}>
+            <Ionicons name="calendar-outline" size={16} color="#6B7280" />
+            <Text style={styles.rowLabel}>
+              {language === "en" ? "Latest leave start" : "अलीकडील रजा सुरू"}:
+            </Text>
+            <Text style={styles.rowValue}>{latestPriorLeaveStart}</Text>
+          </View>
+        ) : (
           <>
             <View style={styles.row}>
               <Ionicons name="calendar-outline" size={16} color="#6B7280" />
-              <Text
-                style={[
-                  styles.rowLabel,
-                  isChargeableLeave && styles.rowLabelGreen,
-                ]}
-              >
-                {language === "en" ? "From" : "पासून"}:
+              <Text style={styles.rowLabel}>
+                {language === "en" ? "Leave start" : "रजा सुरू"}:
               </Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  isChargeableLeave && styles.rowValueGreen,
-                ]}
-              >
-                {startDate}
-              </Text>
+              <Text style={styles.rowValue}>{startDate}</Text>
             </View>
-
-            {isChargeableLeave && (
-              <View style={styles.row}>
-                <Ionicons
-                  name="calendar-outline"
-                  size={16}
-                  color="#065F46"
-                />
-                <Text
-                  style={[
-                    styles.rowLabel,
-                    isChargeableLeave && styles.rowLabelGreen,
-                  ]}
-                >
-                  {language === "en" ? "To" : "पर्यंत"}:
-                </Text>
-                <Text
-                  style={[
-                    styles.rowValue,
-                    isChargeableLeave && styles.rowValueGreen,
-                  ]}
-                >
-                  {endDate}
-                </Text>
-              </View>
-            )}
+            <View style={styles.row}>
+              <Ionicons name="analytics-outline" size={16} color="#6B7280" />
+              <Text style={styles.rowLabel}>
+                {language === "en" ? "Streak (this month)" : "सलगी (हा महिना)"}:
+              </Text>
+              <Text style={styles.rowValue}>{streak}</Text>
+            </View>
           </>
         )}
       </View>
@@ -376,19 +397,12 @@ const LeaveApproval = () => {
     const phone = item.memberId?.phone || item.studentId?.phone;
 
     const isActivation = item.type === "Activation";
+    const streak = Number(item.leaveStatCurrentStreak ?? 0);
 
-    const inactiveDays = Number(item.currentInactiveDays || 0);
-    const isChargeableLeave = inactiveDays > 0;
-    const isInactiveAccount =
-      item.memberId?.status === "Inactive" ||
-      item.studentId?.status === "Inactive";
+    const startDate = formatLeaveYmd(item.startDate);
+    const latestPriorLeaveStart = formatLeaveYmd(item.latestLeaveStartDate);
 
-    const startDate = item.startDate
-      ? new Date(item.startDate).toISOString().split("T")[0]
-      : "-";
-    const endDate = item.endDate
-      ? new Date(item.endDate).toISOString().split("T")[0]
-      : "-";
+    const busy = updatingId === item._id;
 
     return (
       <View style={styles.card}>
@@ -405,126 +419,99 @@ const LeaveApproval = () => {
               </Text>
             )}
           </View>
-          <View style={styles.cardHeaderRight}>
-            <View
-              style={[
-                styles.statusBadge,
-                { backgroundColor: statusStyle.bg },
-              ]}
+          <View
+            style={[
+              styles.statusBadge,
+              { backgroundColor: statusStyle.bg },
+            ]}
+          >
+            <Text
+              style={[styles.statusText, { color: statusStyle.text }]}
+              numberOfLines={1}
             >
-              <Text
-                style={[styles.statusText, { color: statusStyle.text }]}
-                numberOfLines={1}
-              >
-                {item.status}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.approveIconButton,
-                (item.status === "Approved" || updatingId === item._id) &&
-                  styles.actionButtonDisabled,
-              ]}
-              onPress={() => updateStatus(item._id, "Approved")}
-              disabled={item.status === "Approved" || updatingId === item._id}
-              activeOpacity={0.8}
-            >
-              {updatingId === item._id ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-              )}
-            </TouchableOpacity>
+              {item.status}
+            </Text>
           </View>
         </View>
 
-        {isInactiveAccount && (
+        {isActivation ? (
           <View style={styles.row}>
-            <Ionicons name="time-outline" size={16} color="#6B7280" />
+            <Ionicons name="calendar-outline" size={16} color="#6B7280" />
             <Text style={styles.rowLabel}>
-              {language === "en"
-                ? "Inactive days this month:"
-                : "या महिन्यात निष्क्रिय दिवस:"}
+              {language === "en" ? "Latest leave start" : "अलीकडील रजा सुरू"}:
             </Text>
-            <Text style={styles.rowValue}>
-              {inactiveDays} / 5
-            </Text>
+            <Text style={styles.rowValue}>{latestPriorLeaveStart}</Text>
           </View>
-        )}
-
-        {!isActivation && (
+        ) : (
           <>
             <View style={styles.row}>
               <Ionicons name="calendar-outline" size={16} color="#6B7280" />
               <Text style={styles.rowLabel}>
-                {language === "en" ? "From" : "पासून"}:
+                {language === "en" ? "Leave start" : "रजा सुरू"}:
               </Text>
-                  <Text
-                    style={[
-                      styles.rowValue,
-                      isChargeableLeave && styles.rowValueGreen,
-                    ]}
-                  >
-                    {startDate}
-                  </Text>
+              <Text style={styles.rowValue}>{startDate}</Text>
             </View>
-                {isChargeableLeave && (
-                  <View style={styles.row}>
-                    <Ionicons name="calendar-outline" size={16} color="#065F46" />
-                    <Text
-                      style={[
-                        styles.rowLabel,
-                        isChargeableLeave && styles.rowLabelGreen,
-                      ]}
-                    >
-                      {language === "en" ? "To" : "पर्यंत"}:
-                    </Text>
-                    <Text
-                      style={[
-                        styles.rowValue,
-                        isChargeableLeave && styles.rowValueGreen,
-                      ]}
-                    >
-                      {endDate}
-                    </Text>
-                  </View>
-                )}
+            <View style={styles.row}>
+              <Ionicons name="analytics-outline" size={16} color="#6B7280" />
+              <Text style={styles.rowLabel}>
+                {language === "en" ? "Streak (this month)" : "सलगी (हा महिना)"}:
+              </Text>
+              <Text style={styles.rowValue}>{streak}</Text>
+            </View>
           </>
         )}
-        <View style={styles.actions}>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.callButton]}
-            onPress={() => handleCall(phone)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="call-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.actionText}>
-              {language === "en" ? "Call" : "कॉल करा"}
+
+        {busy ? (
+          <View style={styles.actionsBusy}>
+            <ActivityIndicator size="small" color="#111827" />
+            <Text style={styles.actionsBusyText}>
+              {language === "en" ? "Updating…" : "अद्यतनित करत आहे…"}
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.actionButton,
-              styles.rejectButton,
-              (item.status === "Rejected" || updatingId === item._id) &&
-                styles.actionButtonDisabled,
-            ]}
-            onPress={() => updateStatus(item._id, "Rejected")}
-            disabled={item.status === "Rejected" || updatingId === item._id}
-            activeOpacity={0.8}
-          >
-            {updatingId === item._id ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <>
-                <Ionicons name="close-circle" size={18} color="#FFFFFF" />
-                <Text style={styles.actionText}>
-                  {language === "en" ? "Reject" : "नाकार करा"}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
+          </View>
+        ) : (
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.callButton]}
+              onPress={() => handleCall(phone)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="call-outline" size={16} color="#FFFFFF" />
+              <Text style={styles.actionText} numberOfLines={1}>
+                {language === "en" ? "Call" : "कॉल"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.actionButton,
+                styles.approveRowButton,
+                item.status === "Approved" && styles.actionButtonDisabled,
+              ]}
+              onPress={() => updateStatus(item._id, "Approved")}
+              disabled={item.status === "Approved"}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
+              <Text style={styles.actionText} numberOfLines={1}>
+                {language === "en" ? "Approve" : "मान्य"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.actionButton,
+                styles.rejectButton,
+                item.status === "Rejected" && styles.actionButtonDisabled,
+              ]}
+              onPress={() => updateStatus(item._id, "Rejected")}
+              disabled={item.status === "Rejected"}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="close-circle" size={16} color="#FFFFFF" />
+              <Text style={styles.actionText} numberOfLines={1}>
+                {language === "en" ? "Reject" : "नाकार"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     );
   };
@@ -658,36 +645,58 @@ const LeaveApproval = () => {
               <Text style={[styles.formLabel, { marginTop: 14 }]}>
                 {language === "en" ? "Request Type *" : "विनंती प्रकार *"}
               </Text>
-              <View style={styles.typeRow}>
-                {["Leave", "Activation"].map((t) => {
-                  const active = manualType === t;
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      style={[styles.typePill, active && styles.typePillActive]}
-                      onPress={() => setManualType(t)}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={[styles.typePillText, active && styles.typePillTextActive]}>
-                        {t}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              {selectedMember ? (
+                <View style={styles.typeRow}>
+                  <View
+                    style={[styles.typePill, styles.typePillActive, { flex: 1 }]}
+                  >
+                    <Text style={[styles.typePillText, styles.typePillTextActive]}>
+                      {normalizeMemberStatus(selectedMember) === "inactive"
+                        ? language === "en"
+                          ? "Activation"
+                          : "सक्रियकरण"
+                        : language === "en"
+                        ? "Leave"
+                        : "रजा"}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.typeRow}>
+                  {["Leave", "Activation"].map((t) => {
+                    const active = manualType === t;
+                    return (
+                      <TouchableOpacity
+                        key={t}
+                        style={[styles.typePill, active && styles.typePillActive]}
+                        onPress={() => setManualType(t)}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.typePillText, active && styles.typePillTextActive]}>
+                          {t}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
 
               {manualType === "Leave" ? (
                 <>
                   <Text style={[styles.formLabel, { marginTop: 14 }]}>
-                    {language === "en" ? "Start Date * (YYYY-MM-DD)" : "सुरू तारीख * (YYYY-MM-DD)"}
+                    {language === "en" ? "Start Date * (today)" : "सुरू तारीख * (आज)"}
                   </Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="2026-05-01"
-                    value={manualStartDate}
-                    onChangeText={setManualStartDate}
-                    autoCapitalize="none"
-                  />
+                  {selectedMember && normalizeMemberStatus(selectedMember) === "active" ? (
+                    <Text style={styles.readOnlyDateValue}>{manualStartDate || getLocalTodayYmd()}</Text>
+                  ) : (
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="2026-05-01"
+                      value={manualStartDate}
+                      onChangeText={setManualStartDate}
+                      autoCapitalize="none"
+                    />
+                  )}
                   <Text style={[styles.formLabel, { marginTop: 14 }]}>
                     {language === "en"
                       ? "End Date (optional, YYYY-MM-DD)"
@@ -705,16 +714,20 @@ const LeaveApproval = () => {
                 <>
                   <Text style={[styles.formLabel, { marginTop: 14 }]}>
                     {language === "en"
-                      ? "Activation Date * (YYYY-MM-DD)"
-                      : "सक्रिय तारीख * (YYYY-MM-DD)"}
+                      ? "Activation end date * (today)"
+                      : "सक्रियकरण शेवटची तारीख * (आज)"}
                   </Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="2026-05-01"
-                    value={manualEndDate}
-                    onChangeText={setManualEndDate}
-                    autoCapitalize="none"
-                  />
+                  {selectedMember && normalizeMemberStatus(selectedMember) === "inactive" ? (
+                    <Text style={styles.readOnlyDateValue}>{manualEndDate || getLocalTodayYmd()}</Text>
+                  ) : (
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="2026-05-01"
+                      value={manualEndDate}
+                      onChangeText={setManualEndDate}
+                      autoCapitalize="none"
+                    />
+                  )}
                 </>
               )}
 
@@ -897,12 +910,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  cardHeaderRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    flexShrink: 0,
-  },
   cardTitle: {
     fontSize: 16,
     fontWeight: "600",
@@ -938,18 +945,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6B7280",
   },
-  rowLabelGreen: {
-    color: "#065F46",
-  },
   rowValue: {
     marginLeft: 4,
     fontSize: 14,
     color: "#111827",
     flexShrink: 1,
-  },
-  rowValueGreen: {
-    color: "#065F46",
-    fontWeight: "700",
   },
   actions: {
     flexDirection: "row",
@@ -965,14 +965,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
   },
-  approveIconButton: {
-    marginLeft: 8,
-    width: 30,
-    height: 30,
-    borderRadius: 999,
+  approveRowButton: {
     backgroundColor: "#16A34A",
-    alignItems: "center",
-    justifyContent: "center",
   },
   rejectButton: {
     backgroundColor: "#DC2626",
@@ -985,7 +979,20 @@ const styles = StyleSheet.create({
   },
   actionText: {
     color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  actionsBusy: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: 14,
+    paddingVertical: 12,
+  },
+  actionsBusyText: {
     fontSize: 14,
+    color: "#6B7280",
     fontWeight: "600",
   },
   emptyContainer: {
@@ -1023,12 +1030,6 @@ const styles = StyleSheet.create({
     color: "#111827",
   },
   historyReason: {
-    fontSize: 13,
-    color: "#6B7280",
-    fontWeight: "600",
-  },
-  historyInactiveInfo: {
-    marginTop: 6,
     fontSize: 13,
     color: "#6B7280",
     fontWeight: "600",
@@ -1078,6 +1079,15 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     color: "#111827",
+  },
+  readOnlyDateValue: {
+    backgroundColor: "#E5E7EB",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#374151",
   },
   memberPickerBox: {
     marginTop: 10,
