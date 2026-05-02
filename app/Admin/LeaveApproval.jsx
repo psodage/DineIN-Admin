@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Alert,
   Linking,
   Modal,
+  ScrollView,
+  TextInput,
   RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,6 +19,7 @@ import { useRouter } from "expo-router";
 import api from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
+import { fetchMemberDirectory } from "../../lib/memberDirectory";
 
 const STATUS_COLORS = {
   Pending: { bg: "#FEF3C7", text: "#92400E" },
@@ -34,6 +37,15 @@ const LeaveApproval = () => {
   const [updatingId, setUpdatingId] = useState(null);
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [manualModalVisible, setManualModalVisible] = useState(false);
+  const [members, setMembers] = useState([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [memberQuery, setMemberQuery] = useState("");
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [manualType, setManualType] = useState("Leave"); // Leave | Activation
+  const [manualStartDate, setManualStartDate] = useState("");
+  const [manualEndDate, setManualEndDate] = useState("");
+  const [manualSubmitting, setManualSubmitting] = useState(false);
 
   const fetchLeaves = useCallback(async () => {
     try {
@@ -49,6 +61,19 @@ const LeaveApproval = () => {
       setLeaves([]);
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const fetchMembers = useCallback(async () => {
+    try {
+      setMembersLoading(true);
+      const rows = await fetchMemberDirectory(api);
+      setMembers(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      Alert.alert("Error", err?.response?.data?.message || "Failed to load members");
+      setMembers([]);
+    } finally {
+      setMembersLoading(false);
     }
   }, []);
 
@@ -81,17 +106,105 @@ const LeaveApproval = () => {
     }
     if (isAuthenticated) {
       fetchLeaves();
+      fetchMembers();
     }
-  }, [authLoading, isAuthenticated, fetchLeaves]);
+  }, [authLoading, isAuthenticated, fetchLeaves, fetchMembers]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await fetchLeaves();
+      await Promise.all([fetchLeaves(), fetchMembers()]);
     } finally {
       setRefreshing(false);
     }
-  }, [fetchLeaves]);
+  }, [fetchLeaves, fetchMembers]);
+
+  const filteredMembers = useMemo(() => {
+    const q = String(memberQuery || "").trim().toLowerCase();
+    if (!q) return members;
+    return (members || []).filter((m) => {
+      const en = String(m?.name || "").toLowerCase();
+      const mr = String(m?.nameMr || "").toLowerCase();
+      const phone = String(m?.phone || "").toLowerCase();
+      return en.includes(q) || mr.includes(q) || phone.includes(q);
+    });
+  }, [members, memberQuery]);
+
+  const resetManualForm = useCallback(() => {
+    setMemberQuery("");
+    setSelectedMember(null);
+    setManualType("Leave");
+    setManualStartDate("");
+    setManualEndDate("");
+    setManualSubmitting(false);
+  }, []);
+
+  const openManualModal = useCallback(() => {
+    resetManualForm();
+    setManualModalVisible(true);
+  }, [resetManualForm]);
+
+  const closeManualModal = useCallback(() => {
+    setManualModalVisible(false);
+    resetManualForm();
+  }, [resetManualForm]);
+
+  const isValidYmd = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim());
+
+  const submitManualRequest = useCallback(async () => {
+    if (manualSubmitting) return;
+    if (!selectedMember?._id) {
+      Alert.alert("Validation", "Please select member");
+      return;
+    }
+    const type = manualType === "Activation" ? "Activation" : "Leave";
+    const payload = { memberId: selectedMember._id, type };
+
+    if (type === "Leave") {
+      if (!isValidYmd(manualStartDate)) {
+        Alert.alert("Validation", "Start date must be YYYY-MM-DD");
+        return;
+      }
+      payload.startDate = manualStartDate.trim();
+      if (String(manualEndDate || "").trim()) {
+        if (!isValidYmd(manualEndDate)) {
+          Alert.alert("Validation", "End date must be YYYY-MM-DD");
+          return;
+        }
+        payload.endDate = manualEndDate.trim();
+      }
+    } else {
+      if (!isValidYmd(manualEndDate)) {
+        Alert.alert("Validation", "Activation date must be YYYY-MM-DD");
+        return;
+      }
+      payload.endDate = manualEndDate.trim();
+    }
+
+    try {
+      setManualSubmitting(true);
+      const res = await api.post("/api/leave/admin/request", payload);
+      const created = res?.data;
+      if (created?._id) {
+        setLeaves((prev) => [created, ...(prev || [])]);
+      } else {
+        await fetchLeaves();
+      }
+      closeManualModal();
+    } catch (err) {
+      Alert.alert("Error", err?.response?.data?.message || "Failed to create request");
+    } finally {
+      setManualSubmitting(false);
+    }
+  }, [
+    closeManualModal,
+    fetchLeaves,
+    manualEndDate,
+    manualStartDate,
+    manualSubmitting,
+    manualType,
+    selectedMember,
+  ]);
 
   const updateStatus = async (id, status) => {
     try {
@@ -439,13 +552,22 @@ const LeaveApproval = () => {
         <Text style={styles.title}>
           {language === "en" ? "Leave Approvals" : "रजा मंजुरी"}
         </Text>
-        <TouchableOpacity
-          style={styles.historyIconButton}
-          onPress={() => setHistoryModalVisible(true)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="time-outline" size={22} color="#111827" />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerIconButton}
+            onPress={openManualModal}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="add-circle-outline" size={24} color="#111827" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerIconButton}
+            onPress={() => setHistoryModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="time-outline" size={22} color="#111827" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -474,6 +596,146 @@ const LeaveApproval = () => {
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      <Modal
+        visible={manualModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={closeManualModal}
+      >
+        <SafeAreaView style={styles.manualOverlay}>
+          <View style={styles.manualSheet}>
+            <View style={styles.manualHeader}>
+              <Text style={styles.manualTitle}>
+                {language === "en" ? "Manual Request" : "हस्तचलित विनंती"}
+              </Text>
+              <TouchableOpacity onPress={closeManualModal} style={styles.modalClose}>
+                <Ionicons name="close" size={26} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.manualBody} keyboardShouldPersistTaps="handled">
+              <Text style={styles.formLabel}>
+                {language === "en" ? "Member *" : "सदस्य *"}
+              </Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder={
+                  language === "en" ? "Search by name / phone" : "नाव / फोनने शोधा"
+                }
+                value={memberQuery}
+                onChangeText={setMemberQuery}
+                autoCapitalize="none"
+              />
+
+              <View style={styles.memberPickerBox}>
+                {membersLoading ? (
+                  <View style={styles.loadingMini}>
+                    <ActivityIndicator size="small" color="#111827" />
+                  </View>
+                ) : (
+                  (filteredMembers || []).slice(0, 20).map((m) => {
+                    const active = selectedMember?._id === m._id;
+                    return (
+                      <TouchableOpacity
+                        key={String(m._id)}
+                        style={[styles.memberOption, active && styles.memberOptionActive]}
+                        onPress={() => setSelectedMember(m)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.memberOptionText} numberOfLines={1}>
+                          {language === "mr" ? m.nameMr || m.name : m.name || m.nameMr || "-"}
+                        </Text>
+                        <Text style={styles.memberOptionSub} numberOfLines={1}>
+                          {String(m.phone || "").trim() ? m.phone : ""}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </View>
+
+              <Text style={[styles.formLabel, { marginTop: 14 }]}>
+                {language === "en" ? "Request Type *" : "विनंती प्रकार *"}
+              </Text>
+              <View style={styles.typeRow}>
+                {["Leave", "Activation"].map((t) => {
+                  const active = manualType === t;
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      style={[styles.typePill, active && styles.typePillActive]}
+                      onPress={() => setManualType(t)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.typePillText, active && styles.typePillTextActive]}>
+                        {t}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {manualType === "Leave" ? (
+                <>
+                  <Text style={[styles.formLabel, { marginTop: 14 }]}>
+                    {language === "en" ? "Start Date * (YYYY-MM-DD)" : "सुरू तारीख * (YYYY-MM-DD)"}
+                  </Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="2026-05-01"
+                    value={manualStartDate}
+                    onChangeText={setManualStartDate}
+                    autoCapitalize="none"
+                  />
+                  <Text style={[styles.formLabel, { marginTop: 14 }]}>
+                    {language === "en"
+                      ? "End Date (optional, YYYY-MM-DD)"
+                      : "शेवटची तारीख (ऐच्छिक, YYYY-MM-DD)"}
+                  </Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="2026-05-05"
+                    value={manualEndDate}
+                    onChangeText={setManualEndDate}
+                    autoCapitalize="none"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.formLabel, { marginTop: 14 }]}>
+                    {language === "en"
+                      ? "Activation Date * (YYYY-MM-DD)"
+                      : "सक्रिय तारीख * (YYYY-MM-DD)"}
+                  </Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="2026-05-01"
+                    value={manualEndDate}
+                    onChangeText={setManualEndDate}
+                    autoCapitalize="none"
+                  />
+                </>
+              )}
+
+              <TouchableOpacity
+                style={[styles.submitBtn, manualSubmitting && styles.submitBtnDisabled]}
+                onPress={submitManualRequest}
+                disabled={manualSubmitting}
+                activeOpacity={0.85}
+              >
+                {manualSubmitting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.submitBtnText}>
+                    {language === "en" ? "Create Request" : "विनंती तयार करा"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </SafeAreaView>
+      </Modal>
 
       <Modal
         visible={historyModalVisible}
@@ -552,7 +814,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#111827",
   },
-  historyIconButton: {
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  headerIconButton: {
     width: 40,
     height: 40,
     alignItems: "center",
@@ -767,5 +1034,127 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   modalClose: { padding: 4 },
+
+  manualOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  manualSheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "92%",
+  },
+  manualHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  manualTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  manualBody: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#374151",
+    marginBottom: 8,
+  },
+  formInput: {
+    backgroundColor: "#F3F4F6",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#111827",
+  },
+  memberPickerBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    maxHeight: 260,
+    overflow: "hidden",
+  },
+  loadingMini: {
+    paddingVertical: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  memberOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+  },
+  memberOptionActive: {
+    backgroundColor: "#EEF2FF",
+  },
+  memberOptionText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  memberOptionSub: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#6B7280",
+    fontWeight: "600",
+  },
+  typeRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  typePill: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  typePillActive: {
+    borderColor: "#111827",
+    backgroundColor: "#111827",
+  },
+  typePillText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#111827",
+  },
+  typePillTextActive: {
+    color: "#FFFFFF",
+  },
+  submitBtn: {
+    marginTop: 18,
+    marginBottom: 24,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  submitBtnDisabled: {
+    opacity: 0.7,
+  },
+  submitBtnText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
+  },
 });
 

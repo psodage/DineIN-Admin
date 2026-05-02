@@ -637,6 +637,85 @@ router.put(
   }
 );
 
+/**
+ * POST /api/leave/admin/request
+ * Admin: manually create a Leave/Activation request for a member.
+ * Body:
+ * - { memberId, type: "Leave", startDate, endDate? }
+ * - { memberId, type: "Activation", endDate }
+ *
+ * Creates a LeaveRequest with source="Request" and status="Pending".
+ */
+router.post(
+  "/admin/request",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const memberId = String(req.body?.memberId || req.body?.studentId || "").trim();
+      const type = req.body?.type === "Activation" ? "Activation" : "Leave";
+      const startDate = req.body?.startDate;
+      const endDate = req.body?.endDate;
+
+      if (!memberId || !mongoose.Types.ObjectId.isValid(memberId)) {
+        return res.status(400).json({ message: "Valid memberId is required" });
+      }
+
+      const member = await Member.findById(memberId).select("_id").lean();
+      if (!member) {
+        return res.status(404).json({ message: "Member not found" });
+      }
+
+      let start = null;
+      let end = null;
+
+      if (type === "Leave") {
+        start = parseDate(startDate);
+        if (!start) {
+          return res
+            .status(400)
+            .json({ message: "Valid startDate is required for leave request" });
+        }
+        // Optional endDate allowed for Leave (ongoing leave can be endDate=null).
+        end = endDate ? parseDate(endDate) : null;
+        if (endDate && !end) {
+          return res.status(400).json({ message: "Invalid endDate" });
+        }
+        if (end && end.getTime() < start.getTime()) {
+          return res.status(400).json({ message: "endDate cannot be before startDate" });
+        }
+      } else {
+        end = parseDate(endDate);
+        if (!end) {
+          return res
+            .status(400)
+            .json({ message: "Valid endDate is required for activation request" });
+        }
+      }
+
+      const doc = await LeaveRequest.create({
+        memberId: member._id,
+        type,
+        startDate: start,
+        endDate: end,
+        status: "Pending",
+        source: "Request",
+        isOngoing: type === "Leave" && !end,
+      });
+
+      await doc.populate(
+        "memberId",
+        "name nameMr rollNumber roomOwnerName roomOwnerNameMr phone status statusMr mealPlan mealPlanMr"
+      );
+
+      return res.status(201).json(doc);
+    } catch (error) {
+      console.error("Admin create leave request error:", error);
+      return res.status(500).json({ message: "Failed to create leave request" });
+    }
+  }
+);
+
 // POST /api/leave/apply - student submits leave
 router.post(
   "/apply",

@@ -26,11 +26,28 @@ const DEFAULT_MEAL_PLAN_PRICE = {
   Lunch: 1800,
 };
 
+const DEFAULT_MEAL_PLAN_DAILY_RATE = {
+  Both: 100,
+  Dinner: 60,
+  Lunch: 60,
+};
+
 async function mealPlanToDailyRate(mealPlan, monthDate) {
   const normalized = String(mealPlan || "Lunch").trim();
   const plan = ["Lunch", "Dinner", "Both"].includes(normalized)
     ? normalized
     : "Lunch";
+  // Requirement: fixed per-day charge by meal plan.
+  // Both => 100/day, Lunch/Dinner => 60/day.
+  // Keep MealType lookup for compatibility/future use, but do not
+  // divide monthly price by calendar days for due calculation.
+  const configuredDailyRate = Number(
+    DEFAULT_MEAL_PLAN_DAILY_RATE[plan] ?? DEFAULT_MEAL_PLAN_DAILY_RATE.Lunch
+  );
+  if (Number.isFinite(configuredDailyRate) && configuredDailyRate > 0) {
+    return configuredDailyRate;
+  }
+
   const monthDays = getDaysInMonth(monthDate instanceof Date ? monthDate : new Date());
   const priceDoc = await MealType.findOne({ mealPlan: plan }).select("price").lean();
   const monthlyPrice = Number(
