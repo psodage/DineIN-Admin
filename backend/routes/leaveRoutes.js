@@ -374,6 +374,7 @@ router.put(
       const { memberId } = req.params;
       const dateKey = String(req.body?.date || "").trim();
       const inactive = Boolean(req.body?.inactive);
+      const fast = String(req.query?.fast || "").trim() === "1";
 
       if (!memberId || !mongoose.Types.ObjectId.isValid(memberId)) {
         return res.status(400).json({ message: "Invalid memberId" });
@@ -430,6 +431,197 @@ router.put(
       stat.currentStreak = Number(streakMeta.currentStreak || 0);
       stat.lastLeaveDate = streakMeta.lastLeaveDate;
       await stat.save();
+
+      // Fast path: update UI instantly, do heavy recalculation async.
+      if (fast) {
+        const todayKeyLocalFast = formatYMDLocal(new Date());
+        const todayKeyUtcFast = formatYMDUtc(new Date());
+        const isCurrentMonthFast =
+          monthStart.getFullYear() === new Date().getFullYear() &&
+          monthStart.getMonth() === new Date().getMonth();
+        const isEditedDayTodayFast =
+          dateKey === todayKeyLocalFast || dateKey === todayKeyUtcFast;
+        const isTodayMarkedInactiveFast = isEditedDayTodayFast
+          ? inactive
+          : current.has(todayKeyLocalFast) || current.has(todayKeyUtcFast);
+        const updatedMemberStatusFast =
+          isCurrentMonthFast && isTodayMarkedInactiveFast ? "Inactive" : "Active";
+        const updatedMemberStatusMrFast = statusMrFor(updatedMemberStatusFast);
+
+        setImmediate(async () => {
+          try {
+            // Heavy sync (leave requests + member status + billing + monthly due cache)
+            const monthStartFast = monthStart;
+            const monthStartUtcFast = monthStartUtc;
+            const monthEndUtcFast = monthEndUtc;
+
+            const todayKeyLocal = todayKeyLocalFast;
+            const isCurrentMonth =
+              monthStartFast.getFullYear() === new Date().getFullYear() &&
+              monthStartFast.getMonth() === new Date().getMonth();
+            const leaveStreaks = buildLeaveStreaks(allSelectedKeys);
+            const syncedStreaks =
+              isCurrentMonth && Number(streakMeta.currentStreak || 0) > 0
+                ? leaveStreaks.filter((s) => s.endKey !== todayKeyLocal)
+                : leaveStreaks;
+            const latestSyncedStreak =
+              syncedStreaks.length > 0 ? syncedStreaks[syncedStreaks.length - 1] : null;
+            const latestSyncedEndUtc = latestSyncedStreak
+              ? parseYMDUtc(latestSyncedStreak.endKey)
+              : null;
+
+            await LeaveRequest.deleteMany({
+              memberId: member._id,
+              source: "CalendarEdit",
+              $or: [
+                { type: "Leave", startDate: { $gte: monthStartUtcFast, $lt: monthEndUtcFast } },
+                { type: "Activation", endDate: { $gte: monthStartUtcFast, $lt: monthEndUtcFast } },
+              ],
+            });
+            if (syncedStreaks.length > 0) {
+              const docs = syncedStreaks
+                .map((streak) => {
+                  const startUtc = parseYMDUtc(streak.startKey);
+                  const endUtc = parseYMDUtc(streak.endKey);
+                  if (!startUtc || !endUtc) return null;
+                  return [
+                    {
+                      memberId: member._id,
+                      type: "Leave",
+                      source: "CalendarEdit",
+                      startDate: startUtc,
+                      status: "Approved",
+                      billingApplied: true,
+                      billingDaysTotal: Number(streak.days || 0),
+                      billingDaysByMonth: [
+                        { month: monthStartUtcFast, days: Number(streak.days || 0) },
+                      ],
+                    },
+                    {
+                      memberId: member._id,
+                      type: "Activation",
+                      source: "CalendarEdit",
+                      endDate: endUtc,
+                      status: "Approved",
+                      billingApplied: true,
+                      billingDaysTotal: Number(streak.days || 0),
+                      billingDaysByMonth: [
+                        { month: monthStartUtcFast, days: Number(streak.days || 0) },
+                      ],
+                    },
+                  ];
+                })
+                .filter(Boolean)
+                .flat();
+              if (docs.length > 0) {
+                await LeaveRequest.insertMany(docs, { ordered: true });
+              }
+            }
+
+            if (isCurrentMonth && latestSyncedEndUtc) {
+              await LeaveRequest.findOneAndUpdate(
+                {
+                  memberId: member._id,
+                  type: "Leave",
+                  source: "Request",
+                  status: "Approved",
+                  isOngoing: true,
+                },
+                {
+                  $set: {
+                    endDate: latestSyncedEndUtc,
+                    isOngoing: false,
+                  },
+                },
+                { sort: { updatedAt: -1, createdAt: -1 }, new: false }
+              );
+            }
+
+            const todayKeyUtc = todayKeyUtcFast;
+            const isEditedDayToday = isEditedDayTodayFast;
+            const isTodayMarkedInactive = isTodayMarkedInactiveFast;
+
+            if (isCurrentMonth && isTodayMarkedInactive) {
+              const ongoingStreak =
+                leaveStreaks.find((s) => s.endKey === todayKeyLocal) || null;
+              const ongoingStartUtc = ongoingStreak?.startKey
+                ? parseYMDUtc(ongoingStreak.startKey)
+                : null;
+              if (ongoingStartUtc) {
+                await LeaveRequest.findOneAndUpdate(
+                  {
+                    memberId: member._id,
+                    type: "Leave",
+                    source: "Request",
+                    status: "Approved",
+                    isOngoing: true,
+                  },
+                  {
+                    $setOnInsert: {
+                      memberId: member._id,
+                      type: "Leave",
+                      source: "Request",
+                      status: "Approved",
+                    },
+                    $set: {
+                      startDate: ongoingStartUtc,
+                      endDate: null,
+                      isOngoing: true,
+                    },
+                  },
+                  { upsert: true, new: true, setDefaultsOnInsert: true }
+                );
+              }
+            }
+
+            const updatedMemberStatus = updatedMemberStatusFast;
+            const updatedMemberStatusMr = statusMrFor(updatedMemberStatus);
+            await Member.findByIdAndUpdate(
+              member._id,
+              { $set: { status: updatedMemberStatus, statusMr: updatedMemberStatusMr } },
+              { new: false, runValidators: true }
+            );
+
+            const monthlyBilling = await calculateMemberBilling(memberId, monthStartFast, {
+              approvedLeaveDayKeys: split.chargeable,
+            });
+            const nextDue = Math.max(0, Number(monthlyBilling?.remainingAmount || 0));
+            const nextCollected = Math.max(0, Number(monthlyBilling?.paidAmount || 0));
+            const nextStatus = nextDue > 0 ? "Pending" : "Paid";
+
+            await MemberMonthlyDue.updateOne(
+              { memberId, month: monthStartFast },
+              {
+                $set: {
+                  ...(member.userId ? { userId: member.userId } : {}),
+                  due: nextDue,
+                  collected: nextCollected,
+                  status: nextStatus,
+                },
+                $setOnInsert: {
+                  memberId,
+                  month: monthStartFast,
+                },
+              },
+              { upsert: true }
+            );
+          } catch (err) {
+            console.error("Calendar-day async sync failed:", err);
+          }
+        });
+
+        return res.json({
+          memberId,
+          month: monthStart,
+          chargeableLeaveDayKeys: split.chargeable,
+          shortLeaveDayKeys: split.short,
+          inactiveDays: stat.inactiveDays,
+          memberStatus: updatedMemberStatusFast,
+          memberStatusMr: updatedMemberStatusMrFast,
+          minLeaveStreakDays: minStreakDays,
+          fast: true,
+        });
+      }
 
       // Sync one LeaveRequest per completed streak for this month from calendar edits.
       // If the latest streak is still running today, keep it only in LeaveStat for now.

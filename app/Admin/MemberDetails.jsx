@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -88,9 +88,19 @@ export default function MemberDetails() {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [calendarDayUpdating, setCalendarDayUpdating] = useState("");
+  const [calendarDayUpdatingKeys, setCalendarDayUpdatingKeys] = useState([]);
   const [monthlyDue, setMonthlyDue] = useState(0);
   const [totalMonthlyDue, setTotalMonthlyDue] = useState(0);
+  const dueRefreshTimerRef = useRef(null);
+
+  const scheduleDueRefresh = useCallback(() => {
+    if (dueRefreshTimerRef.current) clearTimeout(dueRefreshTimerRef.current);
+    dueRefreshTimerRef.current = setTimeout(() => {
+      fetchMonthlyDue();
+      fetchTotalMonthlyDue();
+    }, 700);
+  }, [fetchMonthlyDue, fetchTotalMonthlyDue]);
+
   const [form, setForm] = useState({
     name: "",
     roomOwnerName: "",
@@ -360,7 +370,8 @@ export default function MemberDetails() {
   }, [screenWidth]);
   const onToggleCalendarDay = useCallback(
     async (dateKey, nextInactive) => {
-      if (!dateKey || calendarDayUpdating) return;
+      if (!dateKey) return;
+      if (calendarDayUpdatingKeys.includes(dateKey)) return;
       const previous = leaveDates;
       setLeaveDates((prev) => {
         const set = new Set(prev || []);
@@ -369,30 +380,33 @@ export default function MemberDetails() {
         return Array.from(set).sort();
       });
       try {
-        setCalendarDayUpdating(dateKey);
-        const res = await api.put(`/api/leave/member/${memberIdValue}/calendar-day`, {
-          date: dateKey,
-          inactive: nextInactive,
-        });
-        if (Number.isFinite(Number(res?.data?.due))) {
-          setMonthlyDue(Number(res.data.due));
-        }
-        if (Number.isFinite(Number(res?.data?.totalDue))) {
-          setTotalMonthlyDue(Number(res.data.totalDue));
-        }
-        const nextMemberStatus =
-          res?.data?.memberStatus === "Inactive" ? "Inactive" : "Active";
-        const nextMemberStatusMr = String(res?.data?.memberStatusMr || "").trim();
-        setMember((prev) =>
-          prev
-            ? {
-                ...prev,
-                status: nextMemberStatus,
-                statusMr: nextMemberStatusMr || prev.statusMr || "",
-              }
-            : prev
+        setCalendarDayUpdatingKeys((keys) => Array.from(new Set([...(keys || []), dateKey])));
+        const res = await api.put(
+          `/api/leave/member/${memberIdValue}/calendar-day`,
+          { date: dateKey, inactive: nextInactive },
+          { params: { fast: 1 } }
         );
-        setForm((prev) => ({ ...prev, status: nextMemberStatus }));
+
+        // If backend returns updated due/totalDue (non-fast), reflect immediately.
+        if (Number.isFinite(Number(res?.data?.due))) setMonthlyDue(Number(res.data.due));
+        if (Number.isFinite(Number(res?.data?.totalDue))) setTotalMonthlyDue(Number(res.data.totalDue));
+        if (res?.data?.memberStatus) {
+          const nextMemberStatus = res.data.memberStatus === "Inactive" ? "Inactive" : "Active";
+          const nextMemberStatusMr = String(res?.data?.memberStatusMr || "").trim();
+          setMember((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: nextMemberStatus,
+                  statusMr: nextMemberStatusMr || prev.statusMr || "",
+                }
+              : prev
+          );
+          setForm((prev) => ({ ...prev, status: nextMemberStatus }));
+        }
+
+        // Render tends to be slow; refresh totals shortly after last tap.
+        scheduleDueRefresh();
       } catch (err) {
         setLeaveDates(previous);
         Alert.alert(
@@ -403,10 +417,10 @@ export default function MemberDetails() {
               : "कॅलेंडर दिवस अपडेट करता आला नाही.")
         );
       } finally {
-        setCalendarDayUpdating("");
+        setCalendarDayUpdatingKeys((keys) => (keys || []).filter((k) => k !== dateKey));
       }
     },
-    [calendarDayUpdating, language, leaveDates, memberIdValue]
+    [calendarDayUpdatingKeys, language, leaveDates, memberIdValue, scheduleDueRefresh]
   );
 
   const onRefresh = useCallback(async () => {
@@ -704,7 +718,7 @@ export default function MemberDetails() {
                     : null;
                 const isBeforeJoining =
                   joinDate && toDateOnlyLocal(cell).getTime() < joinDate.getTime();
-                const isUpdatingCell = calendarDayUpdating === dateKey;
+                const isUpdatingCell = calendarDayUpdatingKeys.includes(dateKey);
                 return (
                   <TouchableOpacity
                     key={dateKey}
@@ -716,7 +730,7 @@ export default function MemberDetails() {
                       isBeforeJoining && styles.beforeJoiningCell,
                       isUpdatingCell && styles.dayUpdatingCell,
                     ]}
-                    disabled={!isEditing || isFuture || isBeforeJoining || !!calendarDayUpdating}
+                    disabled={!isEditing || isFuture || isBeforeJoining || isUpdatingCell}
                     onPress={() => onToggleCalendarDay(dateKey, !isLeave)}
                   >
                     <Text

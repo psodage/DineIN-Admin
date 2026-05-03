@@ -120,7 +120,8 @@ async function computeApprovedLeaveDayKeysForMonth(memberId, monthStart) {
   const statShort = Array.isArray(stat?.shortLeaveDayKeys) ? stat.shortLeaveDayKeys : [];
   if (statChargeable.length > 0 || statShort.length > 0) {
     return {
-      approvedLeaveDayKeys: Array.from(new Set(statChargeable)),
+      // Billing uses all approved leave days (not only chargeable streak days).
+      approvedLeaveDayKeys: Array.from(new Set([...statChargeable, ...statShort])),
     };
   }
 
