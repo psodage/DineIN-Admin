@@ -5,7 +5,7 @@ const LeaveStat = require("../models/LeaveStat");
 const Member = require("../models/Member");
 const MemberMonthlyDue = require("../models/MemberMonthlyDue");
 const AppSetting = require("../models/AppSetting");
-const { calculateMemberBilling } = require("../utils/billing");
+const { calculateMemberBilling, calculateMemberTotalRemainingDue } = require("../utils/billing");
 const { statusMrFor } = require("../utils/memberLabelsMr");
 const {
   authenticate,
@@ -611,11 +611,7 @@ router.put(
           status: nextStatus,
         });
       }
-      const totalDueAgg = await MemberMonthlyDue.aggregate([
-        { $match: { memberId: member._id } },
-        { $group: { _id: null, totalDue: { $sum: "$due" } } },
-      ]);
-      const totalDue = Number(totalDueAgg?.[0]?.totalDue || 0);
+      const totalDue = (await calculateMemberTotalRemainingDue(memberId)) ?? 0;
 
       return res.json({
         memberId,

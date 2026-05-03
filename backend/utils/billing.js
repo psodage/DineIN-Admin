@@ -335,10 +335,44 @@ async function calculateMemberBilling(memberId, monthDate, options = {}) {
   };
 }
 
+/**
+ * Sum remaining balance (total bill minus payments) for every calendar month
+ * from the member's joining month through the current month. Does not rely on
+ * MemberMonthlyDue rows existing for each month.
+ */
+async function calculateMemberTotalRemainingDue(memberId) {
+  const member = await Member.findById(memberId).select("joiningDate createdAt").lean();
+  if (!member) return null;
+
+  const anchor = member.joiningDate || member.createdAt || new Date();
+  const startRange = getMonthRange(anchor);
+  const endRange = getMonthRange(new Date());
+  if (!startRange || !endRange) return 0;
+
+  let cursor = new Date(startRange.start);
+  const endTime = endRange.start.getTime();
+  if (cursor.getTime() > endTime) cursor = new Date(endRange.start);
+
+  const monthStarts = [];
+  while (cursor.getTime() <= endTime) {
+    monthStarts.push(new Date(cursor));
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+
+  const parts = await Promise.all(
+    monthStarts.map(async (monthStart) => {
+      const billing = await calculateMemberBilling(memberId, monthStart);
+      return billing ? Math.max(0, Number(billing.remainingAmount || 0)) : 0;
+    })
+  );
+  return parts.reduce((sum, r) => sum + r, 0);
+}
+
 module.exports = {
   getMonthRange,
   calculateSnackTotalForMonth,
   calculateExpenseShareForMonth,
   calculateMemberBilling,
+  calculateMemberTotalRemainingDue,
 };
 

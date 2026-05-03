@@ -35,6 +35,8 @@ const formatCurrency = (value) => {
   return `Rs. ${amount.toFixed(2)}`;
 };
 
+const toDateOnlyLocal = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
 const getMonthParam = (date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -696,6 +698,12 @@ export default function MemberDetails() {
                 const dateKey = formatDate(cell, "");
                 const isLeave = leaveDateSet.has(dateKey);
                 const isFuture = cell > new Date();
+                const joinDate =
+                  member?.joiningDate && !Number.isNaN(new Date(member.joiningDate).getTime())
+                    ? toDateOnlyLocal(new Date(member.joiningDate))
+                    : null;
+                const isBeforeJoining =
+                  joinDate && toDateOnlyLocal(cell).getTime() < joinDate.getTime();
                 const isUpdatingCell = calendarDayUpdating === dateKey;
                 return (
                   <TouchableOpacity
@@ -705,9 +713,10 @@ export default function MemberDetails() {
                       { width: cellSize, height: cellSize },
                       isLeave ? styles.inactiveDayCell : styles.activeDayCell,
                       isFuture && styles.futureDayCell,
+                      isBeforeJoining && styles.beforeJoiningCell,
                       isUpdatingCell && styles.dayUpdatingCell,
                     ]}
-                    disabled={!isEditing || isFuture || !!calendarDayUpdating}
+                    disabled={!isEditing || isFuture || isBeforeJoining || !!calendarDayUpdating}
                     onPress={() => onToggleCalendarDay(dateKey, !isLeave)}
                   >
                     <Text
@@ -715,6 +724,7 @@ export default function MemberDetails() {
                         styles.cellText,
                         isLeave ? styles.inactiveDayText : styles.activeDayText,
                         isFuture && styles.futureDayText,
+                        isBeforeJoining && styles.beforeJoiningText,
                       ]}
                     >
                       {cell.getDate()}
@@ -1024,6 +1034,9 @@ const styles = StyleSheet.create({
   futureDayCell: {
     backgroundColor: "#F9FAFB",
   },
+  beforeJoiningCell: {
+    backgroundColor: "#F3F4F6",
+  },
   dayUpdatingCell: {
     opacity: 0.6,
   },
@@ -1042,6 +1055,10 @@ const styles = StyleSheet.create({
   futureDayText: {
     color: "#9CA3AF",
     fontWeight: "500",
+  },
+  beforeJoiningText: {
+    color: "#9CA3AF",
+    fontWeight: "600",
   },
   legend: {
     marginTop: 10,

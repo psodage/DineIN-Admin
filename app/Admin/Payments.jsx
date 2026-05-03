@@ -212,8 +212,14 @@ const Payments = () => {
     return min;
   })();
 
-  const minPaymentMonth =
-    earliestPaymentMonth == null ? getSelectedMonth(0) : earliestPaymentMonth;
+  // Keep navigation usable even if there are no payment records yet.
+  // Otherwise earliestPaymentMonth is null and the month back button gets stuck at current month.
+  const earliestSelectableMonth = useMemo(() => {
+    const current = getSelectedMonth(0);
+    const twoYearsBack = getSelectedMonth(-24);
+    if (earliestPaymentMonth == null) return twoYearsBack;
+    return Math.min(earliestPaymentMonth, current);
+  }, [earliestPaymentMonth]);
 
   const billByMemberId = useMemo(() => {
     const map = new Map();
@@ -729,7 +735,7 @@ const Payments = () => {
             onPress={() =>
               setSelectedMonth((m) => {
                 const next = m - 1;
-                return next < minPaymentMonth ? minPaymentMonth : next;
+                return next < earliestSelectableMonth ? earliestSelectableMonth : next;
               })
             }
           >

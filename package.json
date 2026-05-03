@@ -8,7 +8,12 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "run:member-monthly-due-daily": "npm run run:member-monthly-due-daily --prefix backend",
+    "backfill:member-monthly-due": "npm run backfill:member-monthly-due --prefix backend",
+    "recalc:member-monthly-due-apr1": "npm run recalc:member-monthly-due-apr1 --prefix backend",
+    "cleanup:member-monthly-due-legacy": "npm run cleanup:member-monthly-due-legacy --prefix backend",
+    "dedupe:member-monthly-due": "npm run dedupe:member-monthly-due --prefix backend"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

@@ -4,8 +4,10 @@ const mongoose = require("mongoose");
 const Member = require("../models/Member");
 const MemberMonthlyDue = require("../models/MemberMonthlyDue");
 const MealType = require("../models/MealType");
+// Billing utilities populate SnackProduct; ensure the model is registered.
+require("../models/SnackProduct");
 const User = require("../models/User");
-const { calculateMemberBilling } = require("../utils/billing");
+const { calculateMemberBilling, calculateMemberTotalRemainingDue } = require("../utils/billing");
 
 const router = express.Router();
 
@@ -310,21 +312,10 @@ router.get("/:id/monthly-due-total", async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid member id" });
     }
-    const rows = await MemberMonthlyDue.find({
-      memberId: new mongoose.Types.ObjectId(id),
-    })
-      .select("month due collected updatedAt")
-      .lean();
-    const latestRows = pickLatestDueByMonth(rows);
-    const remainings = await Promise.all(
-      latestRows.map(async (row) => {
-        const monthStart = toMonthStart(row?.month);
-        if (!monthStart) return 0;
-        const billing = await calculateMemberBilling(id, monthStart);
-        return billing ? Math.max(0, Number(billing.remainingAmount || 0)) : 0;
-      })
-    );
-    const totalDue = remainings.reduce((sum, r) => sum + r, 0);
+    const totalDue = await calculateMemberTotalRemainingDue(id);
+    if (totalDue === null) {
+      return res.status(404).json({ message: "Member not found" });
+    }
     return res.json({
       memberId: id,
       totalDue,
@@ -390,6 +381,7 @@ router.post("/", async (req, res) => {
       });
     }
 
+    const parsedJoiningDate = joiningDate ? new Date(joiningDate) : new Date();
     const member = await Member.create({
       userId: user?._id,
       name: String(name).trim(),
@@ -397,10 +389,44 @@ router.post("/", async (req, res) => {
       roomOwnerName: String(roomOwnerName).trim(),
       roomOwnerNameMr: String(roomOwnerNameMr || "").trim(),
       phone: String(phone).trim(),
-      joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
+      joiningDate: parsedJoiningDate,
       status: status === "Inactive" ? "Inactive" : "Active",
       mealPlan: ["Lunch", "Dinner", "Both"].includes(mealPlan) ? mealPlan : "Lunch",
     });
+
+    // Create/update monthly due cache row for the member's joining month.
+    // This uses MealType + joiningDate day-count via calculateMemberBilling().
+    const monthStart = new Date(
+      parsedJoiningDate.getFullYear(),
+      parsedJoiningDate.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0
+    );
+    const billing = await calculateMemberBilling(member._id, monthStart);
+    if (billing) {
+      const due = Math.max(0, Number(billing.remainingAmount || 0));
+      const collected = Math.max(0, Number(billing.paidAmount || 0));
+      const statusValue = due > 0 ? "Pending" : "Paid";
+      await MemberMonthlyDue.updateOne(
+        { memberId: member._id, month: monthStart },
+        {
+          $set: {
+            userId: user?._id || null,
+            due,
+            collected,
+            status: statusValue,
+          },
+          $setOnInsert: {
+            memberId: member._id,
+            month: monthStart,
+          },
+        },
+        { upsert: true }
+      );
+    }
 
     const saved = await Member.findById(member._id).populate("userId", "email").lean();
     return res.status(201).json({ ...saved, email: saved?.userId?.email || "" });

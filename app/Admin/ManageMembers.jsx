@@ -10,10 +10,13 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  ScrollView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import api from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
@@ -31,6 +34,19 @@ const ManageMembers = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
+  const [creatingMember, setCreatingMember] = useState(false);
+  const [showJoiningDatePicker, setShowJoiningDatePicker] = useState(false);
+  const [newMember, setNewMember] = useState({
+    name: "",
+    roomOwnerName: "",
+    phone: "",
+    email: "",
+    password: "",
+    mealPlan: "Lunch",
+    status: "Active",
+    joiningDate: new Date(),
+  });
 
   const fetchStudents = useCallback(async () => {
     try {
@@ -110,6 +126,76 @@ const ManageMembers = () => {
       pathname: "/Admin/MemberDetails",
       params: { memberId: String(member._id) },
     });
+  };
+
+  const updateNewMember = (key, value) => {
+    setNewMember((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const resetNewMemberForm = () => {
+    setNewMember({
+      name: "",
+      roomOwnerName: "",
+      phone: "",
+      email: "",
+      password: "",
+      mealPlan: "Lunch",
+      status: "Active",
+      joiningDate: new Date(),
+    });
+    setShowJoiningDatePicker(false);
+  };
+
+  const createMember = async () => {
+    const payload = {
+      name: String(newMember.name || "").trim(),
+      roomOwnerName: String(newMember.roomOwnerName || "").trim(),
+      phone: String(newMember.phone || "").trim(),
+      email: String(newMember.email || "").trim(),
+      password: String(newMember.password || "").trim(),
+      mealPlan: ["Lunch", "Dinner", "Both"].includes(newMember.mealPlan)
+        ? newMember.mealPlan
+        : "Lunch",
+      status: newMember.status === "Inactive" ? "Inactive" : "Active",
+      joiningDate:
+        newMember?.joiningDate instanceof Date && !Number.isNaN(newMember.joiningDate.getTime())
+          ? newMember.joiningDate.toISOString()
+          : new Date().toISOString(),
+    };
+
+    if (!payload.name || !payload.roomOwnerName || !payload.phone || !payload.password) {
+      Alert.alert(
+        language === "en" ? "Validation error" : "तपासणी त्रुटी",
+        language === "en"
+          ? "Name, room owner, phone and password are required."
+          : "नाव, रूम मालक, फोन आणि पासवर्ड आवश्यक आहेत."
+      );
+      return;
+    }
+
+    try {
+      setCreatingMember(true);
+      await api.post("/api/members", payload);
+      await Promise.all([fetchStudents(), fetchPendingApprovals()]);
+      resetNewMemberForm();
+      setShowAddMemberForm(false);
+      Alert.alert(
+        language === "en" ? "Success" : "यशस्वी",
+        language === "en"
+          ? "Member added successfully."
+          : "सदस्य यशस्वीरित्या जोडला."
+      );
+    } catch (err) {
+      Alert.alert(
+        language === "en" ? "Error" : "त्रुटी",
+        err?.response?.data?.message ||
+          (language === "en"
+            ? "Failed to add member."
+            : "सदस्य जोडता आला नाही.")
+      );
+    } finally {
+      setCreatingMember(false);
+    }
   };
 
   const renderStudentCard = ({ item }) => (
@@ -213,6 +299,188 @@ const ManageMembers = () => {
           <TouchableOpacity onPress={() => setSearchQuery("")} style={styles.clearSearch}>
             <Ionicons name="close-circle" size={20} color="#9CA3AF" />
           </TouchableOpacity>
+        ) : null}
+      </View>
+
+      <View style={styles.addMemberSection}>
+        <TouchableOpacity
+          style={styles.addMemberToggle}
+          onPress={() => setShowAddMemberForm((prev) => !prev)}
+          activeOpacity={0.8}
+          disabled={creatingMember}
+        >
+          <Ionicons
+            name={showAddMemberForm ? "remove-circle-outline" : "add-circle-outline"}
+            size={20}
+            color="#FFFFFF"
+          />
+          <Text style={styles.addMemberToggleText}>
+            {showAddMemberForm
+              ? language === "en"
+                ? "Close Add Member"
+                : "सदस्य जोडणे बंद करा"
+              : language === "en"
+              ? "Add New Member"
+              : "नवीन सदस्य जोडा"}
+          </Text>
+        </TouchableOpacity>
+
+        {showAddMemberForm ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.addMemberFormScrollContent}
+          >
+            <View style={styles.addMemberForm}>
+              <TextInput
+                style={styles.addMemberInput}
+                placeholder={language === "en" ? "Member name *" : "सदस्य नाव *"}
+                value={newMember.name}
+                onChangeText={(v) => updateNewMember("name", v)}
+              />
+              <TextInput
+                style={styles.addMemberInput}
+                placeholder={language === "en" ? "Room owner name *" : "रूम मालक नाव *"}
+                value={newMember.roomOwnerName}
+                onChangeText={(v) => updateNewMember("roomOwnerName", v)}
+              />
+              <TextInput
+                style={styles.addMemberInput}
+                placeholder={language === "en" ? "Phone *" : "फोन *"}
+                value={newMember.phone}
+                onChangeText={(v) => updateNewMember("phone", v)}
+                keyboardType="phone-pad"
+              />
+              <TextInput
+                style={styles.addMemberInput}
+                placeholder={language === "en" ? "Email (optional)" : "ईमेल (ऐच्छिक)"}
+                value={newMember.email}
+                onChangeText={(v) => updateNewMember("email", v)}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+              <TextInput
+                style={styles.addMemberInput}
+                placeholder={language === "en" ? "Password *" : "पासवर्ड *"}
+                value={newMember.password}
+                onChangeText={(v) => updateNewMember("password", v)}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+
+              <TouchableOpacity
+                style={[styles.addMemberInput, styles.joiningDateInput]}
+                onPress={() => setShowJoiningDatePicker(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.joiningDateText}>
+                  {(language === "en" ? "Joining date" : "जॉईनिंग तारीख")}:{" "}
+                  {new Date(newMember.joiningDate || new Date()).toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </Text>
+                <Ionicons name="calendar-outline" size={18} color="#6B7280" />
+              </TouchableOpacity>
+              {showJoiningDatePicker ? (
+                <DateTimePicker
+                  value={
+                    newMember?.joiningDate instanceof Date && !Number.isNaN(newMember.joiningDate.getTime())
+                      ? newMember.joiningDate
+                      : new Date()
+                  }
+                  mode="date"
+                  display={Platform.OS === "ios" ? "spinner" : "default"}
+                  maximumDate={new Date()}
+                  onChange={(event, selectedDate) => {
+                    // Android fires twice; close picker after a selection/cancel.
+                    if (Platform.OS !== "ios") setShowJoiningDatePicker(false);
+                    if (selectedDate) updateNewMember("joiningDate", selectedDate);
+                  }}
+                />
+              ) : null}
+
+              <View style={styles.addMemberPillRow}>
+                {["Lunch", "Dinner", "Both"].map((plan) => (
+                  <TouchableOpacity
+                    key={plan}
+                    style={[
+                      styles.addMemberPill,
+                      newMember.mealPlan === plan && styles.addMemberPillSelected,
+                    ]}
+                    onPress={() => updateNewMember("mealPlan", plan)}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.addMemberPillText,
+                        newMember.mealPlan === plan && styles.addMemberPillTextSelected,
+                      ]}
+                    >
+                      {plan}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={styles.addMemberPillRow}>
+                {["Active", "Inactive"].map((state) => (
+                  <TouchableOpacity
+                    key={state}
+                    style={[
+                      styles.addMemberPill,
+                      newMember.status === state && styles.addMemberPillSelected,
+                    ]}
+                    onPress={() => updateNewMember("status", state)}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.addMemberPillText,
+                        newMember.status === state && styles.addMemberPillTextSelected,
+                      ]}
+                    >
+                      {state}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={styles.addMemberActions}>
+                <TouchableOpacity
+                  style={[
+                    styles.addMemberSubmitButton,
+                    creatingMember && styles.addMemberActionDisabled,
+                  ]}
+                  onPress={createMember}
+                  disabled={creatingMember}
+                >
+                  <Text style={styles.addMemberSubmitText}>
+                    {creatingMember
+                      ? language === "en"
+                        ? "Adding..."
+                        : "जोडत आहे..."
+                      : language === "en"
+                      ? "Save Member"
+                      : "सदस्य सेव्ह करा"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.addMemberCancelButton}
+                  onPress={() => {
+                    resetNewMemberForm();
+                    setShowAddMemberForm(false);
+                  }}
+                  disabled={creatingMember}
+                >
+                  <Text style={styles.addMemberCancelText}>
+                    {language === "en" ? "Cancel" : "रद्द करा"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
         ) : null}
       </View>
 
@@ -424,6 +692,120 @@ const styles = StyleSheet.create({
   },
   clearSearch: {
     padding: 4,
+  },
+  addMemberSection: {
+    marginHorizontal: 16,
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  addMemberToggle: {
+    backgroundColor: "#111827",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  addMemberToggleText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  addMemberFormScrollContent: {
+    width: "100%",
+  },
+  addMemberForm: {
+    marginTop: 10,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+    gap: 8,
+    minWidth: "100%",
+  },
+  addMemberInput: {
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#111827",
+  },
+  joiningDateInput: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  joiningDateText: {
+    fontSize: 14,
+    color: "#111827",
+    fontWeight: "500",
+  },
+  addMemberPillRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  addMemberPill: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 999,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F9FAFB",
+  },
+  addMemberPillSelected: {
+    backgroundColor: "#111827",
+    borderColor: "#111827",
+  },
+  addMemberPillText: {
+    fontSize: 13,
+    color: "#111827",
+    fontWeight: "600",
+  },
+  addMemberPillTextSelected: {
+    color: "#FFFFFF",
+  },
+  addMemberActions: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 4,
+  },
+  addMemberSubmitButton: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: "#16A34A",
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  addMemberSubmitText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  addMemberCancelButton: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: "#6B7280",
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  addMemberCancelText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  addMemberActionDisabled: {
+    opacity: 0.7,
   },
   listContent: {
     paddingHorizontal: 16,
