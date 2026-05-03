@@ -8,6 +8,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
+        "NODE_ENV": "development",
         "EXPO_PUBLIC_API_BASE_URL": "https://dinein-admin.onrender.com"
       }
     },
@@ -17,12 +18,14 @@
         "buildType": "apk"
       },
       "env": {
+        "NODE_ENV": "production",
         "EXPO_PUBLIC_API_BASE_URL": "https://dinein-admin.onrender.com"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
+        "NODE_ENV": "production",
         "EXPO_PUBLIC_API_BASE_URL": "https://dinein-admin.onrender.com"
       }
     }
