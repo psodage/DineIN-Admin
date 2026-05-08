@@ -26,6 +26,7 @@ const DASHBOARD_CARDS = [
   { id: "expenses", titleKey: "card_expenses", icon: "wallet" },
   { id: "payments", titleKey: "card_payments", icon: "card" },
   { id: "reports", titleKey: "card_reports", icon: "document-text" },
+  { id: "backups", title: "Backups", icon: "cloud" },
 
   // Remaining cards
   { id: "menu", titleKey: "card_menu", icon: "restaurant" },
@@ -119,6 +120,9 @@ const AdminDashboard = () => {
       case "leave":
         router.push("/Admin/LeaveApproval");
         break;
+      case "backups":
+        router.push("/Admin/BackupManagement");
+        break;
       default:
         break;
     }
@@ -200,7 +204,7 @@ const AdminDashboard = () => {
                       isDisabled && styles.cardTitleDisabled,
                     ]}
                   >
-                    {t(card.titleKey)}
+                    {card.title || t(card.titleKey)}
                   </Text>
                   {card.id === "leave" && pendingLeaveCount > 0 ? (
                     <View style={styles.pendingBadge}>

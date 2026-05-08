@@ -7,3 +7,6 @@ const explicit = process.env.EXPO_PUBLIC_API_BASE_URL;
 export const API_BASE_URL = explicit
   ? String(explicit).replace(/\/+$/, "")
   : `http://localhost:${DEFAULT_PORT}`;
+
+export const RESTORE_CONFIRM_PHRASE =
+  process.env.EXPO_PUBLIC_RESTORE_CONFIRM_PHRASE || "RESTORE_NOW";

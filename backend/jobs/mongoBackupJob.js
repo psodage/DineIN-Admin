@@ -59,6 +59,30 @@ function runCommand(command, args, label) {
   });
 }
 
+function runCommandCapture(command, args, label) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { shell: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += String(chunk || "");
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += String(chunk || "");
+    });
+    proc.on("error", (err) => {
+      reject(new Error(`${label} failed to start: ${err.message}`));
+    });
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new Error(`${label} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}`));
+    });
+  });
+}
+
 async function ensureDir(dirPath) {
   await fs.promises.mkdir(dirPath, { recursive: true });
 }
@@ -157,6 +181,46 @@ async function runMongoRestoreFromDrive(options = {}) {
   console.log("[restore] MongoDB restore completed successfully");
 }
 
+async function listRemoteBackupFiles() {
+  const mongoUri = process.env.MONGODB_URI;
+  if (!mongoUri) throw new Error("MONGODB_URI is missing in backend/.env");
+  if (!rcloneRemote) throw new Error("RCLONE_REMOTE is missing in backend/.env");
+  const dbName = sanitizeName(process.env.MONGO_BACKUP_DB_NAME || getDbNameFromUri(mongoUri));
+  const remoteBase = `${rcloneRemote}:${rcloneRemoteDir}/${dbName}`;
+  const { stdout } = await runCommandCapture(
+    rcloneCommand,
+    ["lsjson", `"${remoteBase}"`],
+    "rclone lsjson"
+  );
+  let parsed = [];
+  try {
+    parsed = JSON.parse(stdout || "[]");
+  } catch (_) {
+    throw new Error("Unable to parse backup list from Google Drive");
+  }
+  return (Array.isArray(parsed) ? parsed : [])
+    .filter((item) => item && item.IsDir !== true && String(item.Name || "").endsWith(".archive.gz"))
+    .map((item) => ({
+      name: String(item.Name || ""),
+      modTime: item.ModTime ? new Date(item.ModTime).getTime() : 0,
+      size: Number(item.Size || 0),
+    }))
+    .sort((a, b) => b.modTime - a.modTime);
+}
+
+async function runMongoRestoreLatestFromDrive(options = {}) {
+  const files = await listRemoteBackupFiles();
+  if (!files.length) {
+    throw new Error("No backup files found on Google Drive");
+  }
+  const latest = files[0];
+  await runMongoRestoreFromDrive({
+    fileName: latest.name,
+    confirmPhrase: options.confirmPhrase,
+  });
+  return latest;
+}
+
 function msUntilNextMidnight(now = new Date()) {
   const next = new Date(now);
   next.setDate(now.getDate() + 1);
@@ -190,6 +254,8 @@ function startMongoBackupDailyScheduler() {
 module.exports = {
   runMongoBackupToDrive,
   runMongoRestoreFromDrive,
+  runMongoRestoreLatestFromDrive,
+  listRemoteBackupFiles,
   startMongoBackupDailyScheduler,
   restoreConfirmPhrase,
 };
