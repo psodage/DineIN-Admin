@@ -49,6 +49,14 @@ const normalizeMonthDate = (value) => {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 };
 
+const toSafeAmount = (...values) => {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return 0;
+};
+
 const isValidMonthDate = (date) =>
   date instanceof Date && !Number.isNaN(date.getTime());
 
@@ -92,6 +100,8 @@ export default function MemberDetails() {
   const [monthlyDue, setMonthlyDue] = useState(0);
   const [totalMonthlyDue, setTotalMonthlyDue] = useState(0);
   const dueRefreshTimerRef = useRef(null);
+  const latestMonthlyDueReqRef = useRef(0);
+  const latestTotalDueReqRef = useRef(0);
 
   const [form, setForm] = useState({
     name: "",
@@ -182,22 +192,32 @@ export default function MemberDetails() {
 
   const fetchMonthlyDue = useCallback(async () => {
     if (!memberIdValue) return;
+    const requestId = latestMonthlyDueReqRef.current + 1;
+    latestMonthlyDueReqRef.current = requestId;
     try {
       const res = await api.get(`/api/members/${memberIdValue}/monthly-due`, {
         params: { month: monthParam },
       });
-      setMonthlyDue(Number(res?.data?.due || 0));
+      if (latestMonthlyDueReqRef.current !== requestId) return;
+      const payload = res?.data || {};
+      setMonthlyDue(toSafeAmount(payload?.due, payload?.remainingForMonth, payload?.monthlyDue, 0));
     } catch (_err) {
+      if (latestMonthlyDueReqRef.current !== requestId) return;
       setMonthlyDue(0);
     }
   }, [memberIdValue, monthParam]);
 
   const fetchTotalMonthlyDue = useCallback(async () => {
     if (!memberIdValue) return;
+    const requestId = latestTotalDueReqRef.current + 1;
+    latestTotalDueReqRef.current = requestId;
     try {
       const res = await api.get(`/api/members/${memberIdValue}/monthly-due-total`);
-      setTotalMonthlyDue(Number(res?.data?.totalDue || 0));
+      if (latestTotalDueReqRef.current !== requestId) return;
+      const payload = res?.data || {};
+      setTotalMonthlyDue(toSafeAmount(payload?.totalDue, payload?.due, 0));
     } catch (_err) {
+      if (latestTotalDueReqRef.current !== requestId) return;
       setTotalMonthlyDue(0);
     }
   }, [memberIdValue]);
