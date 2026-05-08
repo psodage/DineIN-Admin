@@ -18,15 +18,21 @@ import { useLanguage } from "../../LanguageContext";
 import LanguageToggle from "../../components/LanguageToggle";
 
 const DASHBOARD_CARDS = [
+  // Priority order requested:
+  // 1) Manage Members  2) Extra Snacks  3) Mess Expenses  4) Reports
   { id: "students", titleKey: "card_students", icon: "people" },
-  { id: "menu", titleKey: "card_menu", icon: "restaurant" },
-  { id: "expenses", titleKey: "card_expenses", icon: "wallet" },
   { id: "snacks", titleKey: "card_snacks", icon: "fast-food" },
-  { id: "snackProducts", titleKey: "card_snack_products", icon: "pricetag" },
-  { id: "payments", titleKey: "card_payments", icon: "card" },
+  { id: "expenses", titleKey: "card_expenses", icon: "wallet" },
   { id: "reports", titleKey: "card_reports", icon: "document-text" },
+
+  // Remaining cards
+  { id: "payments", titleKey: "card_payments", icon: "card" },
+  { id: "menu", titleKey: "card_menu", icon: "restaurant" },
+  { id: "snackProducts", titleKey: "card_snack_products", icon: "pricetag" },
   { id: "leave", titleKey: "card_leave", icon: "calendar" },
 ];
+
+const DISABLED_DASHBOARD_CARDS = new Set(["menu", "snackProducts", "leave"]);
 
 const AdminDashboard = () => {
   const router = useRouter();
@@ -82,6 +88,7 @@ const AdminDashboard = () => {
   }, [fetchPendingLeaveCount]);
 
   const handleCardPress = (cardId) => {
+    if (DISABLED_DASHBOARD_CARDS.has(cardId)) return;
     switch (cardId) {
       case "students":
         router.push("/Admin/ManageMembers");
@@ -159,26 +166,48 @@ const AdminDashboard = () => {
         </View>
 
         <View style={styles.grid}>
-          {DASHBOARD_CARDS.map((card) => (
-            <TouchableOpacity
-              key={card.id}
-              style={styles.card}
-              onPress={() => handleCardPress(card.id)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.iconWrapper}>
-                <Ionicons name={card.icon} size={28} color="#111827" />
-              </View>
-              <View style={styles.cardFooter}>
-                <Text style={styles.cardTitle}>{t(card.titleKey)}</Text>
-                {card.id === "leave" && pendingLeaveCount > 0 ? (
-                  <View style={styles.pendingBadge}>
-                    <Text style={styles.pendingBadgeText}>{pendingLeaveCount}</Text>
-                  </View>
-                ) : null}
-              </View>
-            </TouchableOpacity>
-          ))}
+          {DASHBOARD_CARDS.map((card) => {
+            const isDisabled = DISABLED_DASHBOARD_CARDS.has(card.id);
+            return (
+              <TouchableOpacity
+                key={card.id}
+                style={[styles.card, isDisabled && styles.cardDisabled]}
+                onPress={() => handleCardPress(card.id)}
+                activeOpacity={isDisabled ? 1 : 0.7}
+                disabled={isDisabled}
+              >
+                <View
+                  style={[
+                    styles.iconWrapper,
+                    isDisabled && styles.iconWrapperDisabled,
+                  ]}
+                >
+                  <Ionicons
+                    name={card.icon}
+                    size={28}
+                    color={isDisabled ? "#9CA3AF" : "#111827"}
+                  />
+                </View>
+                <View style={styles.cardFooter}>
+                  <Text
+                    style={[
+                      styles.cardTitle,
+                      isDisabled && styles.cardTitleDisabled,
+                    ]}
+                  >
+                    {t(card.titleKey)}
+                  </Text>
+                  {card.id === "leave" && pendingLeaveCount > 0 ? (
+                    <View style={styles.pendingBadge}>
+                      <Text style={styles.pendingBadgeText}>
+                        {pendingLeaveCount}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         <TouchableOpacity
@@ -277,6 +306,11 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
+  cardDisabled: {
+    backgroundColor: "#E5E7EB",
+    shadowOpacity: 0,
+    elevation: 0,
+  },
   iconWrapper: {
     width: 48,
     height: 48,
@@ -286,10 +320,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 12,
   },
+  iconWrapperDisabled: {
+    backgroundColor: "#D1D5DB",
+  },
   cardTitle: {
     fontSize: 15,
     fontWeight: "600",
     color: "#111827",
+  },
+  cardTitleDisabled: {
+    color: "#6B7280",
   },
   cardFooter: {
     flexDirection: "row",

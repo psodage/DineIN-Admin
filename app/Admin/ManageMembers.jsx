@@ -335,21 +335,21 @@ const ManageMembers = () => {
               <TextInput
                 style={styles.addMemberInput}
                 placeholder={language === "en" ? "Member name *" : "सदस्य नाव *"}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#000000"
                 value={newMember.name}
                 onChangeText={(v) => updateNewMember("name", v)}
               />
               <TextInput
                 style={styles.addMemberInput}
                 placeholder={language === "en" ? "Room owner name *" : "रूम मालक नाव *"}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#000000"
                 value={newMember.roomOwnerName}
                 onChangeText={(v) => updateNewMember("roomOwnerName", v)}
               />
               <TextInput
                 style={styles.addMemberInput}
                 placeholder={language === "en" ? "Phone *" : "फोन *"}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#000000"
                 value={newMember.phone}
                 onChangeText={(v) => updateNewMember("phone", v)}
                 keyboardType="phone-pad"
@@ -357,7 +357,7 @@ const ManageMembers = () => {
               <TextInput
                 style={styles.addMemberInput}
                 placeholder={language === "en" ? "Email (optional)" : "ईमेल (ऐच्छिक)"}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#000000"
                 value={newMember.email}
                 onChangeText={(v) => updateNewMember("email", v)}
                 keyboardType="email-address"
@@ -366,7 +366,7 @@ const ManageMembers = () => {
               <TextInput
                 style={styles.addMemberInput}
                 placeholder={language === "en" ? "Password *" : "पासवर्ड *"}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#000000"
                 value={newMember.password}
                 onChangeText={(v) => updateNewMember("password", v)}
                 secureTextEntry
