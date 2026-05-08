@@ -97,7 +97,7 @@ router.get("/", async (_req, res) => {
 
 router.get("/due-month", async (req, res) => {
   try {
-    const { monthStart, monthEnd } =
+    const { monthStart } =
       getMonthBounds(req.query.month) ||
       (() => {
         const nowStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -113,19 +113,6 @@ router.get("/due-month", async (req, res) => {
         return { monthStart: nowStart, monthEnd: nowEnd };
       })();
 
-    const monthRows = await MemberMonthlyDue.find({
-      month: { $gte: monthStart, $lt: monthEnd },
-    })
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .lean();
-
-    const latestByMemberId = new Map();
-    for (const row of monthRows) {
-      const memberKey = String(row?.memberId || "");
-      if (!memberKey || latestByMemberId.has(memberKey)) continue;
-      latestByMemberId.set(memberKey, row);
-    }
-
     const members = await Member.find({})
       .populate("userId", "email")
       .lean();
@@ -134,24 +121,13 @@ router.get("/due-month", async (req, res) => {
     const billings = (
       await Promise.all(
         Array.from(memberById.entries()).map(async ([memberId, m]) => {
-          const monthlyDue = latestByMemberId.get(memberId);
-          let dueAmount = Math.max(0, Number(monthlyDue?.due || 0));
-          let collectedAmount = Math.max(0, Number(monthlyDue?.collected || 0));
-          let remainingAmount = dueAmount;
-          // `MemberMonthlyDue.due` stores the remaining balance for the month (not the gross bill).
-          // If we use `dueAmount` as `totalBill`, then once a member fully pays (due=0) the UI
-          // thinks there was no bill and won't count them as "Members Paid".
-          let totalBill = Math.max(0, dueAmount + collectedAmount);
-
-          // Fallback: if monthly due cache row is missing for this member/month,
-          // compute due from billing so UI does not show N/A.
-          if (!monthlyDue) {
-            const billing = await calculateMemberBilling(memberId, monthStart);
-            dueAmount = Math.max(0, Number(billing?.totalBill || 0));
-            collectedAmount = Math.max(0, Number(billing?.paidAmount || 0));
-            remainingAmount = Math.max(0, Number(billing?.remainingAmount || 0));
-            totalBill = Math.max(0, Number(billing?.totalBill || dueAmount));
-          }
+          // Use billing as source of truth so all admin screens show the same due values.
+          // MemberMonthlyDue is a cache and can lag briefly after edits/payments.
+          const billing = await calculateMemberBilling(memberId, monthStart);
+          const dueAmount = Math.max(0, Number(billing?.totalBill || 0));
+          const collectedAmount = Math.max(0, Number(billing?.paidAmount || 0));
+          const remainingAmount = Math.max(0, Number(billing?.remainingAmount || 0));
+          const totalBill = Math.max(0, Number(billing?.totalBill || dueAmount));
 
           return {
             memberId,
