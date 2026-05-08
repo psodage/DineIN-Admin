@@ -138,7 +138,10 @@ router.get("/due-month", async (req, res) => {
           let dueAmount = Math.max(0, Number(monthlyDue?.due || 0));
           let collectedAmount = Math.max(0, Number(monthlyDue?.collected || 0));
           let remainingAmount = dueAmount;
-          let totalBill = Math.max(0, dueAmount);
+          // `MemberMonthlyDue.due` stores the remaining balance for the month (not the gross bill).
+          // If we use `dueAmount` as `totalBill`, then once a member fully pays (due=0) the UI
+          // thinks there was no bill and won't count them as "Members Paid".
+          let totalBill = Math.max(0, dueAmount + collectedAmount);
 
           // Fallback: if monthly due cache row is missing for this member/month,
           // compute due from billing so UI does not show N/A.

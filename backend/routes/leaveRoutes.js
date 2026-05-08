@@ -773,36 +773,23 @@ router.put(
       const nextDue = Math.max(0, Number(monthlyBilling?.remainingAmount || 0));
       const nextCollected = Math.max(0, Number(monthlyBilling?.paidAmount || 0));
       const nextStatus = nextDue > 0 ? "Pending" : "Paid";
-      const existingMonthlyDue = await MemberMonthlyDue.findOne({
-        memberId,
-        month: monthStart,
-      }).lean();
-
-      let monthlyDue = null;
-      if (existingMonthlyDue?._id) {
-        monthlyDue = await MemberMonthlyDue.findOneAndUpdate(
-          { _id: existingMonthlyDue._id },
-          {
-            $set: {
-              // Do not override with null for legacy members with missing userId.
-              ...(member.userId ? { userId: member.userId } : {}),
-              due: nextDue,
-              collected: nextCollected,
-              status: nextStatus,
-            },
+      const monthlyDue = await MemberMonthlyDue.findOneAndUpdate(
+        { memberId, month: monthStart },
+        {
+          $set: {
+            // Do not override with null for legacy members with missing userId.
+            ...(member.userId ? { userId: member.userId } : {}),
+            due: nextDue,
+            collected: nextCollected,
+            status: nextStatus,
           },
-          { new: true }
-        );
-      } else if (member.userId) {
-        monthlyDue = await MemberMonthlyDue.create({
-          memberId,
-          userId: member.userId,
-          month: monthStart,
-          due: nextDue,
-          collected: nextCollected,
-          status: nextStatus,
-        });
-      }
+          $setOnInsert: {
+            memberId,
+            month: monthStart,
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
       const totalDue = (await calculateMemberTotalRemainingDue(memberId)) ?? 0;
 
       return res.json({

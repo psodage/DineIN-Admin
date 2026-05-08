@@ -48,6 +48,21 @@ const toYearMonthValue = (value) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
+const toFiniteNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const getRemainingAmountFromBill = (bill) => {
+  if (!bill || typeof bill !== "object") return null;
+  const remaining = toFiniteNumber(bill.remainingAmount ?? bill.remainingForMonth);
+  if (remaining != null) return Math.max(0, remaining);
+  const due = toFiniteNumber(bill.dueAmount ?? bill.due);
+  const paid = toFiniteNumber(bill.paidAmount ?? bill.collected);
+  if (due == null && paid == null) return null;
+  return Math.max(0, Math.max(0, Number(due || 0)) - Math.max(0, Number(paid || 0)));
+};
+
 const Payments = () => {
   const router = useRouter();
   const { loading: authLoading, isAuthenticated } = useAuth();
@@ -159,12 +174,13 @@ const Payments = () => {
       setMonthMemberBills(rows);
       const totals = rows.reduce(
         (acc, row) => {
-          const due = Number(
-            row?.dueAmount ?? row?.due ?? row?.remainingAmount ?? row?.remainingForMonth ?? 0
-          );
+          const remaining = getRemainingAmountFromBill(row);
           const collected = Number(row?.paidAmount ?? row?.collected ?? 0);
-          const totalBill = Math.max(0, Number(row?.totalBill ?? due + collected));
-          const finalDue = Math.max(0, Math.max(0, due) - Math.max(0, collected));
+          const totalBill = Math.max(
+            0,
+            Number(row?.totalBill ?? (remaining == null ? 0 : remaining + Math.max(0, collected)))
+          );
+          const finalDue = Math.max(0, Number(remaining || 0));
           acc.collected += Math.max(0, collected);
           acc.pending += finalDue;
           if (totalBill > 0 && finalDue <= 0) acc.membersPaid += 1;
@@ -232,29 +248,10 @@ const Payments = () => {
   }, [monthMemberBills]);
 
   const monthMemberStatusRows = useMemo(() => {
-    const resolveNumber = (value) => {
-      if (value == null) return null;
-      const n = Number(value);
-      return Number.isFinite(n) ? n : null;
-    };
-
     const rows = (members || []).map((m) => {
       const id = String(m?._id || "");
       const bill = billByMemberId.get(id);
-      const dueRaw =
-        bill && typeof bill === "object"
-          ? resolveNumber(
-              bill.dueAmount ?? bill.due ?? bill.remainingAmount ?? bill.remainingForMonth
-            )
-          : null;
-      const collectedRaw =
-        bill && typeof bill === "object"
-          ? resolveNumber(bill.paidAmount ?? bill.collected)
-          : null;
-      const due =
-        dueRaw == null && collectedRaw == null
-          ? null
-          : Math.max(0, Math.max(0, Number(dueRaw || 0)) - Math.max(0, Number(collectedRaw || 0)));
+      const due = getRemainingAmountFromBill(bill);
       const monthlyStatus =
         bill && due != null ? (due <= 0 ? "Paid" : "Pending") : "N/A";
       return {
@@ -583,13 +580,24 @@ const Payments = () => {
         upiTransactionId: paymentMethod === "UPI" ? String(upiTransactionId).trim() : "",
       });
       const paidMonthDate = new Date(selectedDueMonth);
+      const paidMonthValue = !Number.isNaN(paidMonthDate.getTime())
+        ? paidMonthDate.getFullYear() * 12 + paidMonthDate.getMonth()
+        : null;
       if (!Number.isNaN(paidMonthDate.getTime())) {
         setSelectedMonth(
           paidMonthDate.getFullYear() * 12 + paidMonthDate.getMonth()
         );
       }
       Alert.alert("Success", "Payment marked successfully");
-      await Promise.all([fetchPayments(), loadMemberDueInfo(selectedMember._id)]);
+      // Refresh month summary + member paid/pending list immediately.
+      // If the payment is for the currently selected month, we must refetch because
+      // the selectedMonth state won't change (so the effect won't rerun).
+      const shouldRefreshCurrentMonth = paidMonthValue == null || paidMonthValue === selectedMonth;
+      await Promise.all([
+        fetchPayments(),
+        loadMemberDueInfo(selectedMember._id),
+        shouldRefreshCurrentMonth ? fetchMonthMemberBills() : Promise.resolve(),
+      ]);
       closeRecordModal();
     } catch (err) {
       Alert.alert("Error", err?.response?.data?.message || "Failed to mark payment");
