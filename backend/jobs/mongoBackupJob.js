@@ -3,11 +3,16 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const backupRoot = process.env.MONGO_BACKUP_LOCAL_DIR || path.join(__dirname, "..", "backups");
+const restoreTmpRoot = process.env.MONGO_RESTORE_TMP_DIR || path.join(__dirname, "..", "restore-tmp");
 const rcloneRemote = process.env.RCLONE_REMOTE;
 const rcloneRemoteDir = process.env.RCLONE_REMOTE_DIR || "MongoBackups";
 const localRetentionDays = Number(process.env.MONGO_BACKUP_LOCAL_RETENTION_DAYS || "14");
 const remoteRetentionDays = Number(process.env.MONGO_BACKUP_REMOTE_RETENTION_DAYS || "30");
 const autoEnabled = String(process.env.MONGO_BACKUP_AUTO_ENABLED || "false").toLowerCase() === "true";
+const mongoDumpCommand = process.env.MONGODUMP_PATH || "mongodump";
+const mongoRestoreCommand = process.env.MONGORESTORE_PATH || "mongorestore";
+const rcloneCommand = process.env.RCLONE_PATH || "rclone";
+const restoreConfirmPhrase = process.env.MONGO_RESTORE_CONFIRM_PHRASE || "RESTORE_NOW";
 
 function getTimestamp() {
   const now = new Date();
@@ -19,6 +24,17 @@ function getTimestamp() {
 
 function sanitizeName(name) {
   return String(name || "database").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function sanitizeArchiveFileName(name) {
+  const base = path.basename(String(name || ""));
+  if (!base.endsWith(".archive.gz")) {
+    throw new Error("Invalid backup file name. Expected .archive.gz file");
+  }
+  if (base.includes("..") || base.includes("/") || base.includes("\\")) {
+    throw new Error("Invalid backup file name");
+  }
+  return base;
 }
 
 function getDbNameFromUri(uri) {
@@ -33,7 +49,9 @@ function getDbNameFromUri(uri) {
 function runCommand(command, args, label) {
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, { shell: true, stdio: "inherit" });
-    proc.on("error", (err) => reject(new Error(`${label} failed to start: ${err.message}`)));
+    proc.on("error", (err) => {
+      reject(new Error(`${label} failed to start: ${err.message}`));
+    });
     proc.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`${label} exited with code ${code}`));
@@ -75,14 +93,14 @@ async function runMongoBackupToDrive() {
   await ensureDir(backupRoot);
   console.log(`[backup] Creating MongoDB archive at: ${archivePath}`);
   await runCommand(
-    "mongodump",
+    mongoDumpCommand,
     [`--uri="${mongoUri}"`, `--archive="${archivePath}"`, "--gzip"],
     "mongodump"
   );
 
   console.log(`[backup] Uploading archive to Google Drive: ${remoteFilePath}`);
   await runCommand(
-    "rclone",
+    rcloneCommand,
     ["copyto", `"${archivePath}"`, `"${remoteFilePath}"`, "--progress"],
     "rclone copyto"
   );
@@ -92,13 +110,51 @@ async function runMongoBackupToDrive() {
   if (Number.isFinite(remoteRetentionDays) && remoteRetentionDays > 0) {
     console.log(`[backup] Removing remote backups older than ${remoteRetentionDays} days`);
     await runCommand(
-      "rclone",
+      rcloneCommand,
       ["delete", `"${remoteBase}"`, "--min-age", `${remoteRetentionDays}d`],
       "rclone delete"
     );
   }
 
   console.log("[backup] MongoDB backup completed successfully");
+}
+
+async function runMongoRestoreFromDrive(options = {}) {
+  const mongoUri = process.env.MONGODB_URI;
+  if (!mongoUri) throw new Error("MONGODB_URI is missing in backend/.env");
+  if (!rcloneRemote) throw new Error("RCLONE_REMOTE is missing in backend/.env");
+
+  const dbName = sanitizeName(process.env.MONGO_BACKUP_DB_NAME || getDbNameFromUri(mongoUri));
+  const fileName = sanitizeArchiveFileName(options.fileName);
+  const confirmPhrase = String(options.confirmPhrase || "").trim();
+  if (confirmPhrase !== restoreConfirmPhrase) {
+    throw new Error("Restore confirmation phrase is invalid");
+  }
+
+  const remoteBase = `${rcloneRemote}:${rcloneRemoteDir}/${dbName}`;
+  const remoteFilePath = `${remoteBase}/${fileName}`;
+  const localArchivePath = path.join(restoreTmpRoot, fileName);
+
+  await ensureDir(restoreTmpRoot);
+  console.log(`[restore] Downloading backup from Google Drive: ${remoteFilePath}`);
+  await runCommand(
+    rcloneCommand,
+    ["copyto", `"${remoteFilePath}"`, `"${localArchivePath}"`, "--progress"],
+    "rclone copyto"
+  );
+
+  console.log(`[restore] Restoring MongoDB from archive: ${localArchivePath}`);
+  await runCommand(
+    mongoRestoreCommand,
+    [`--uri="${mongoUri}"`, `--archive="${localArchivePath}"`, "--gzip", "--drop"],
+    "mongorestore"
+  );
+
+  try {
+    await fs.promises.unlink(localArchivePath);
+  } catch (_) {}
+
+  console.log("[restore] MongoDB restore completed successfully");
 }
 
 function msUntilNextMidnight(now = new Date()) {
@@ -133,5 +189,7 @@ function startMongoBackupDailyScheduler() {
 
 module.exports = {
   runMongoBackupToDrive,
+  runMongoRestoreFromDrive,
   startMongoBackupDailyScheduler,
+  restoreConfirmPhrase,
 };
