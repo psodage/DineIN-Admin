@@ -66,14 +66,12 @@ const INITIAL_FORM = {
   customerName: "",
   customerType: "outside",
   studentId: "",
-  snackProductId: "",
   snackItem: "",
   quantity: "",
   pricePerItem: "",
 };
 
 const INITIAL_CART_ITEM = {
-  snackProductId: "",
   snackItem: "",
   quantity: "",
   pricePerItem: "",
@@ -85,7 +83,6 @@ export default function ExtraSnacks() {
   const { language, t } = useLanguage();
   const [snacks, setSnacks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [snackProducts, setSnackProducts] = useState([]);
   const [members, setMembers] = useState([]);
   const [formVisible, setFormVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -93,7 +90,6 @@ export default function ExtraSnacks() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
   const [errors, setErrors] = useState({});
-  const [showSnackPicker, setShowSnackPicker] = useState(false);
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [memberSearch, setMemberSearch] = useState("");
   const [cartItems, setCartItems] = useState([]);
@@ -127,21 +123,6 @@ export default function ExtraSnacks() {
     }
   };
 
-  const fetchSnackProducts = async () => {
-    try {
-      const res = await api.get("/api/snack-products", {
-        params: { available: "true" },
-      });
-      setSnackProducts(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      Alert.alert(
-        t("alert_error"),
-        err.response?.data?.message || t("extra_snacks_alert_fetch_products_failed")
-      );
-      setSnackProducts([]);
-    }
-  };
-
   const fetchMembers = async () => {
     try {
       const rows = await fetchMemberDirectory(api);
@@ -162,7 +143,6 @@ export default function ExtraSnacks() {
     }
     if (isAuthenticated) {
       fetchSnacks();
-      fetchSnackProducts();
       fetchMembers();
     }
   }, [authLoading, isAuthenticated]);
@@ -185,16 +165,6 @@ export default function ExtraSnacks() {
       ownerLower.includes(search)
     );
   });
-
-  const selectedSnackProduct =
-    snackProducts.find((p) => p._id === form.snackProductId) || null;
-  const snackProductsForDropdown = snackProducts.filter(
-    (p) => Number(p?.quantity ?? 0) > 0
-  );
-  const snackItemDisplay =
-    language === "mr"
-      ? selectedSnackProduct?.nameMr || form.snackItem
-      : form.snackItem || selectedSnackProduct?.name || "";
 
   const allSnacks = snacks;
 
@@ -333,16 +303,12 @@ export default function ExtraSnacks() {
     setForm(INITIAL_FORM);
     setCartItems([]);
     setErrors({});
-    setShowSnackPicker(false);
     setShowMemberPicker(false);
     setMemberSearch("");
     setFormVisible(true);
   };
 
   const openEditForm = (snack) => {
-    const matchedProduct = snackProducts.find(
-      (p) => p.name === snack.snackItem
-    );
     setEditingId(snack._id);
     setForm({
       customerName: snack.isOutsideCustomer
@@ -352,16 +318,12 @@ export default function ExtraSnacks() {
         : snack.studentName || snack.studentNameMr || "",
       customerType: snack.isOutsideCustomer ? "outside" : "member",
       studentId: snack.studentId || "",
-      snackProductId: matchedProduct?._id || "",
       snackItem: snack.snackItem || "",
       quantity: String(snack.quantity || ""),
-      pricePerItem: String(
-        matchedProduct?.price ?? snack.pricePerItem ?? ""
-      ),
+      pricePerItem: String(snack.pricePerItem ?? ""),
       date: snack.date ? new Date(snack.date) : new Date(),
     });
     setErrors({});
-    setShowSnackPicker(false);
     setShowMemberPicker(false);
     setMemberSearch("");
     setFormVisible(true);
@@ -371,7 +333,6 @@ export default function ExtraSnacks() {
     setFormVisible(false);
     setEditingId(null);
     setCartItems([]);
-    setShowSnackPicker(false);
     setShowMemberPicker(false);
   };
 
@@ -390,29 +351,19 @@ export default function ExtraSnacks() {
     const shouldValidateCurrentSnackFields =
       mode !== "finalize" || editingId || cartItems.length === 0;
     if (shouldValidateCurrentSnackFields) {
-      if (!form.snackProductId) e.snackItem = "Snack item is required";
+      if (!form.snackItem?.trim()) e.snackItem = "Snack item is required";
       if (!form.quantity?.trim()) e.quantity = "Quantity is required";
       else {
         const q = Number(form.quantity);
         if (!Number.isFinite(q) || !Number.isInteger(q) || q < 1) {
           e.quantity = "Enter a valid quantity (integer min 1)";
-        } else if (selectedSnackProduct) {
-          const stockQty = Number(selectedSnackProduct?.quantity);
-          const isStockFinite = Number.isFinite(stockQty);
-          const cartReservedQty =
-            mode === "cart"
-              ? cartItems.reduce((sum, item) => {
-                  return item.snackProductId === form.snackProductId
-                    ? sum + Number(item.quantity || 0)
-                    : sum;
-                }, 0)
-              : 0;
-          if (selectedSnackProduct?.availability === false) {
-            e.quantity = "This snack is not available";
-          } else if (isStockFinite && q + cartReservedQty > stockQty) {
-            const remainingQty = Math.max(stockQty - cartReservedQty, 0);
-            e.quantity = `Only ${remainingQty} available. Please reduce quantity.`;
-          }
+        }
+      }
+      if (!form.pricePerItem?.trim()) e.pricePerItem = "Price is required";
+      else {
+        const p = Number(form.pricePerItem);
+        if (!Number.isFinite(p) || p < 0) {
+          e.pricePerItem = "Enter a valid price (0 or more)";
         }
       }
     }
@@ -431,7 +382,6 @@ export default function ExtraSnacks() {
       ...f,
       ...INITIAL_CART_ITEM,
     }));
-    setShowSnackPicker(false);
   };
 
   const handleAddToCart = () => {
@@ -439,21 +389,25 @@ export default function ExtraSnacks() {
 
     const quantity = Number(form.quantity);
     const pricePerItem = Number(form.pricePerItem);
-    const product = snackProducts.find((p) => p._id === form.snackProductId);
 
     setCartItems((items) => [
       ...items,
       {
-        id: `${form.snackProductId}-${Date.now()}-${items.length}`,
-        snackProductId: form.snackProductId,
-        snackItem: form.snackItem,
-        snackItemMr: product?.nameMr || form.snackItem,
+        id: `${form.snackItem}-${Date.now()}-${items.length}`,
+        snackItem: form.snackItem.trim(),
+        snackItemMr: form.snackItem.trim(),
         quantity,
         pricePerItem,
         totalPrice: quantity * pricePerItem,
       },
     ]);
-    setErrors((e) => ({ ...e, snackItem: null, quantity: null, cart: null }));
+    setErrors((e) => ({
+      ...e,
+      snackItem: null,
+      quantity: null,
+      pricePerItem: null,
+      cart: null,
+    }));
     resetCartItemFields();
   };
 
@@ -476,7 +430,6 @@ export default function ExtraSnacks() {
           isOutsideCustomer,
           studentId: isOutsideCustomer ? undefined : form.studentId,
           customerName: isOutsideCustomer ? form.customerName.trim() : undefined,
-          snackProductId: form.snackProductId || undefined,
           snackItem: form.snackItem.trim(),
           quantity: Number(form.quantity),
           pricePerItem: Number(form.pricePerItem),
@@ -492,8 +445,10 @@ export default function ExtraSnacks() {
           customerName: isOutsideCustomer ? form.customerName.trim() : undefined,
           date: new Date().toISOString(),
           orders: cartItems.map((item) => ({
-            snackProductId: item.snackProductId,
+            snackItem: item.snackItem,
             quantity: Number(item.quantity),
+            pricePerItem: Number(item.pricePerItem),
+            totalPrice: Number(item.totalPrice),
           })),
         };
         await api.post("/api/snacks/bulk", payload);
@@ -893,7 +848,7 @@ export default function ExtraSnacks() {
                         ? "e.g. Walk-in customer or राजेश पाटील"
                         : "उदा. राजेश पाटील किंवा Walk-in customer"
                     }
-                    placeholderTextColor="#9CA3AF"
+                    placeholderTextColor="#111827"
                   />
                   {errors.customerName ? (
                     <Text style={styles.errorText}>{errors.customerName}</Text>
@@ -938,7 +893,7 @@ export default function ExtraSnacks() {
                             ? "Search by name, roll or room"
                             : "नाव, रोल किंवा रूमने शोधा"
                         }
-                        placeholderTextColor="#9CA3AF"
+                        placeholderTextColor="#111827"
                       />
                       <ScrollView
                         nestedScrollEnabled
@@ -998,66 +953,36 @@ export default function ExtraSnacks() {
               <Text style={styles.formLabel}>
                 {language === "en" ? "Snack Item *" : "स्नॅक आयटम *"}
               </Text>
-              <TouchableOpacity
-                style={[
-                  styles.input,
-                  styles.pickerInput,
-                  errors.snackItem && styles.inputError,
-                ]}
-                onPress={() => setShowSnackPicker((v) => !v)}
-              >
-                <Text
-                  style={
-                    snackItemDisplay ? styles.pickerText : styles.placeholderText
-                  }
-                >
-                  {snackItemDisplay ||
-                    (language === "en"
-                      ? "Select snack item"
-                      : "स्नॅक आयटम निवडा")}
-                </Text>
-                <Ionicons name="chevron-down" size={20} color="#6B7280" />
-              </TouchableOpacity>
-              {showSnackPicker && (
-                <View style={styles.dropdownOptions}>
-                  <ScrollView
-                    nestedScrollEnabled
-                    showsVerticalScrollIndicator
-                  >
-                    {snackProductsForDropdown.map((p) => (
-                      <TouchableOpacity
-                        key={p._id}
-                        style={styles.dropdownOption}
-                        onPress={() => {
-                          setForm((f) => ({
-                            ...f,
-                            snackProductId: p._id,
-                            snackItem: p.name,
-                            pricePerItem: String(p.price),
-                          }));
-                          setErrors((e) => ({ ...e, snackItem: null }));
-                          setShowSnackPicker(false);
-                        }}
-                      >
-                        <Text style={styles.dropdownOptionText}>
-                          {language === "mr" ? p.nameMr || p.name : p.name} · ₹
-                          {Number(p.price || 0).toLocaleString("en-IN")}{" "}
-                          {p.category ? `(${p.category})` : ""}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                    {snackProductsForDropdown.length === 0 ? (
-                      <Text style={styles.emptyDropdownText}>
-                        {language === "en"
-                          ? "No snack items available"
-                          : "कोणतेही स्नॅक आयटम उपलब्ध नाहीत"}
-                      </Text>
-                    ) : null}
-                  </ScrollView>
-                </View>
-              )}
+              <TextInput
+                style={[styles.input, errors.snackItem && styles.inputError]}
+                value={form.snackItem}
+                onChangeText={(v) => {
+                  setForm((f) => ({ ...f, snackItem: v }));
+                  setErrors((e) => ({ ...e, snackItem: null }));
+                }}
+                placeholder={language === "en" ? "Enter snack item" : "स्नॅक आयटम टाका"}
+                placeholderTextColor="#111827"
+              />
               {errors.snackItem ? (
                 <Text style={styles.errorText}>{errors.snackItem}</Text>
+              ) : null}
+
+              <Text style={styles.formLabel}>
+                {language === "en" ? "Price Per Item (₹) *" : "प्रति आयटम किंमत (₹) *"}
+              </Text>
+              <TextInput
+                style={[styles.input, errors.pricePerItem && styles.inputError]}
+                value={form.pricePerItem}
+                onChangeText={(v) => {
+                  setForm((f) => ({ ...f, pricePerItem: v }));
+                  setErrors((e) => ({ ...e, pricePerItem: null }));
+                }}
+                placeholder="0"
+                placeholderTextColor="#111827"
+                keyboardType="decimal-pad"
+              />
+              {errors.pricePerItem ? (
+                <Text style={styles.errorText}>{errors.pricePerItem}</Text>
               ) : null}
 
               <Text style={styles.formLabel}>
@@ -1071,7 +996,7 @@ export default function ExtraSnacks() {
                   setErrors((e) => ({ ...e, quantity: null }));
                 }}
                 placeholder="0"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#111827"
                 keyboardType="numeric"
               />
               {errors.quantity ? (
@@ -1426,7 +1351,7 @@ const styles = StyleSheet.create({
   },
   placeholderText: {
     fontSize: 16,
-    color: "#9CA3AF",
+    color: "#111827",
   },
   totalDisplay: {
     backgroundColor: "#F3F4F6",

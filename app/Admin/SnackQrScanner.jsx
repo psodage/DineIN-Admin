@@ -22,6 +22,7 @@ export default function SnackQrScanner() {
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [cameraMountError, setCameraMountError] = useState("");
 
   useEffect(() => {
     if (!permission) {
@@ -108,6 +109,7 @@ export default function SnackQrScanner() {
     setScanned(false);
     setValidationResult(null);
     setErrorMessage("");
+    setCameraMountError("");
   };
 
   if (!permission) {
@@ -206,14 +208,30 @@ export default function SnackQrScanner() {
 
       <View style={styles.content}>
         <View style={styles.scannerWrapper}>
-          <CameraView
-            style={StyleSheet.absoluteFillObject}
-            facing="back"
-            barcodeScannerSettings={{
-              barcodeTypes: ["qr"],
-            }}
-            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          />
+          {cameraMountError ? (
+            <View style={styles.cameraErrorFallback}>
+              <Ionicons name="camera-reverse-outline" size={28} color="#E5E7EB" />
+              <Text style={styles.cameraErrorText}>
+                {cameraMountError}
+              </Text>
+            </View>
+          ) : (
+            <CameraView
+              style={StyleSheet.absoluteFillObject}
+              facing="back"
+              barcodeScannerSettings={{
+                barcodeTypes: ["qr"],
+              }}
+              onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+              onMountError={(event) => {
+                const nativeMessage = event?.nativeEvent?.message;
+                setCameraMountError(
+                  nativeMessage ||
+                    "Camera is currently unavailable on this device. Please enable camera access and try again."
+                );
+              }}
+            />
+          )}
           <View style={styles.overlay}>
             <View style={styles.overlaySide} />
             <View style={styles.overlayCenter}>
@@ -374,6 +392,20 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     overflow: "hidden",
     backgroundColor: "#000",
+  },
+  cameraErrorFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    backgroundColor: "#111827",
+    gap: 10,
+  },
+  cameraErrorText: {
+    color: "#E5E7EB",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,

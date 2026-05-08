@@ -912,6 +912,7 @@ const Payments = () => {
                     <TextInput
                       style={styles.searchInput}
                       placeholder={language === "en" ? "Search member name" : "सदस्य नाव शोधा"}
+                      placeholderTextColor="#000000"
                       value={memberSearchQuery}
                       onChangeText={setMemberSearchQuery}
                     />
@@ -1012,6 +1013,7 @@ const Payments = () => {
                   onChangeText={setPaidAmount}
                   keyboardType="decimal-pad"
                   placeholder={language === "en" ? "e.g. 500" : "उदा. ५००"}
+                  placeholderTextColor="#000000"
                 />
                 {isOverpay ? (
                   <Text style={styles.formErrorText}>
@@ -1073,6 +1075,7 @@ const Payments = () => {
                     placeholder={
                       language === "en" ? "Enter UPI transaction ID" : "UPI व्यवहार आयडी टाका"
                     }
+                    placeholderTextColor="#000000"
                     autoCapitalize="none"
                   />
                 </View>

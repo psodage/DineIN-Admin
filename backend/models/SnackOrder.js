@@ -28,6 +28,10 @@ const snackOrderSchema = new mongoose.Schema(
       required: false,
       index: true,
     },
+    // Snapshot fields for manual snack entry when snackId is not used.
+    snackItemSnapshot: { type: String, trim: true, default: "" },
+    snackItemMrSnapshot: { type: String, trim: true, default: "" },
+    pricePerItemSnapshot: { type: Number, min: 0, default: null },
 
     quantity: { type: Number, required: true, min: 1 },
     // Optional billed amount override (used for bill-split allocations).

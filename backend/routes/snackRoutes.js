@@ -27,6 +27,35 @@ function toMonthStart(dateValue) {
   return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
 }
 
+function toSerializedSnackOrder(orderDoc, outside) {
+  const doc = typeof orderDoc?.toObject === "function" ? orderDoc.toObject() : orderDoc;
+  const hasProduct = !!doc?.snackId;
+  const pricePerItem = hasProduct
+    ? Number(doc?.snackId?.price || 0)
+    : Number(doc?.pricePerItemSnapshot || 0);
+  const snackItem = hasProduct ? doc?.snackId?.name || "" : doc?.snackItemSnapshot || "";
+  const snackItemMr = hasProduct
+    ? doc?.snackId?.nameMr || doc?.snackId?.name || ""
+    : doc?.snackItemMrSnapshot || snackItem;
+  const totalPrice =
+    Number.isFinite(Number(doc?.chargedAmount)) && Number(doc?.chargedAmount) >= 0
+      ? Number(doc?.chargedAmount)
+      : pricePerItem * Number(doc?.quantity || 0);
+
+  return {
+    ...doc,
+    snackItem,
+    snackItemMr,
+    pricePerItem,
+    totalPrice,
+    memberName: !outside ? doc?.memberId?.name : undefined,
+    memberNameMr: !outside ? doc?.memberId?.nameMr : undefined,
+    customerName: outside ? doc?.customerName : undefined,
+    customerNameMr: outside ? doc?.customerNameMr : undefined,
+    referenceId: doc?.purchaseReference || String(doc?._id || ""),
+  };
+}
+
 // GET /api/snacks - Fetch all snack orders
 router.get("/", async (req, res) => {
   try {
@@ -35,23 +64,9 @@ router.get("/", async (req, res) => {
       .populate("snackId", "name nameMr price category")
       .populate("memberId", "name nameMr rollNumber roomOwnerName roomOwnerNameMr");
 
-    const serialized = (orders || []).map((o) => {
-      const pricePerItem = Number(o?.snackId?.price || 0);
-      const totalPrice = pricePerItem * Number(o?.quantity || 0);
-      const snackItem = o?.snackId?.name || "";
-      const snackItemMr = o?.snackId?.nameMr || snackItem;
-      return {
-        ...o.toObject(),
-        snackItem,
-        snackItemMr,
-        pricePerItem,
-        totalPrice,
-        memberName: !o.isOutsideCustomer ? o?.memberId?.name : undefined,
-        memberNameMr: !o.isOutsideCustomer ? o?.memberId?.nameMr : undefined,
-        customerName: o.isOutsideCustomer ? o?.customerName : undefined,
-        customerNameMr: o.isOutsideCustomer ? o?.customerNameMr : undefined,
-      };
-    });
+    const serialized = (orders || []).map((o) =>
+      toSerializedSnackOrder(o, !!o?.isOutsideCustomer)
+    );
 
     res.json(serialized);
   } catch (error) {
@@ -77,19 +92,7 @@ router.get(
         .populate("snackId", "name nameMr price category")
         .lean();
 
-      const serialized = orders.map((o) => {
-        const pricePerItem = Number(o?.snackId?.price || 0);
-        const totalPrice = pricePerItem * Number(o?.quantity || 0);
-        const snackItem = o?.snackId?.name || "";
-        const snackItemMr = o?.snackId?.nameMr || snackItem;
-        return {
-          ...o,
-          snackItem,
-          snackItemMr,
-          pricePerItem,
-          totalPrice,
-        };
-      });
+      const serialized = orders.map((o) => toSerializedSnackOrder(o, false));
 
       res.json(serialized);
     } catch (error) {
@@ -210,21 +213,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    const pricePerItem = Number(populated?.snackId?.price || 0);
-    const totalPrice = pricePerItem * Number(populated?.quantity || 0);
-
-    res.status(201).json({
-      ...populated,
-      snackItem: populated?.snackId?.name || "",
-      snackItemMr: populated?.snackId?.nameMr || populated?.snackId?.name || "",
-      pricePerItem,
-      totalPrice,
-      memberName: !outside ? populated?.memberId?.name : undefined,
-      memberNameMr: !outside ? populated?.memberId?.nameMr : undefined,
-      customerName: outside ? populated?.customerName : undefined,
-      customerNameMr: outside ? populated?.customerNameMr : undefined,
-      referenceId: populated?.purchaseReference || String(populated?._id || ""),
-    });
+    res.status(201).json(toSerializedSnackOrder(populated, outside));
   } catch (error) {
     console.error("Create snack error:", error);
     res.status(500).json({ message: "Failed to create snack order" });
@@ -279,31 +268,60 @@ router.post("/bulk", async (req, res) => {
     for (const item of orders) {
       const rowSnackId = item?.snackId || item?.snackProductId;
       const qty = Number(item?.quantity);
+      const rowSnackItem = String(item?.snackItem || "").trim();
+      const rowSnackItemMr = String(item?.snackItemMr || "").trim();
+      const rowPricePerItem = Number(item?.pricePerItem);
 
-      if (!rowSnackId) {
-        return res.status(400).json({ message: "snackId is required for each cart item" });
-      }
       if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 1) {
         return res.status(400).json({
           message: "Each cart item quantity must be an integer at least 1",
         });
       }
 
-      const snack = await SnackProduct.findById(rowSnackId).lean();
-      if (!snack) {
-        return res.status(404).json({ message: "Snack product not found" });
+      if (rowSnackId) {
+        const snack = await SnackProduct.findById(rowSnackId).lean();
+        if (!snack) {
+          return res.status(404).json({ message: "Snack product not found" });
+        }
+        if (!snack.availability) {
+          return res.status(400).json({ message: `${snack.name} is not available` });
+        }
+
+        normalizedRows.push({
+          memberId: outside ? undefined : resolvedMemberId,
+          customerName: resolvedCustomerName,
+          customerNameMr: resolvedCustomerNameMr,
+          snackId: rowSnackId,
+          quantity: qty,
+          chargedAmount: qty * Number(snack?.price || 0),
+          date: orderDate,
+          isOutsideCustomer: outside,
+          commonOrderId,
+        });
+        continue;
       }
-      if (!snack.availability) {
-        return res.status(400).json({ message: `${snack.name} is not available` });
+
+      if (!rowSnackItem) {
+        return res.status(400).json({
+          message: "snackItem is required when snackId is not provided",
+        });
+      }
+      if (!Number.isFinite(rowPricePerItem) || rowPricePerItem < 0) {
+        return res.status(400).json({
+          message: "pricePerItem must be a valid non-negative number",
+        });
       }
 
       normalizedRows.push({
         memberId: outside ? undefined : resolvedMemberId,
         customerName: resolvedCustomerName,
         customerNameMr: resolvedCustomerNameMr,
-        snackId: rowSnackId,
+        snackId: undefined,
+        snackItemSnapshot: rowSnackItem,
+        snackItemMrSnapshot: rowSnackItemMr || rowSnackItem,
+        pricePerItemSnapshot: rowPricePerItem,
         quantity: qty,
-        chargedAmount: qty * Number(snack?.price || 0),
+        chargedAmount: qty * rowPricePerItem,
         date: orderDate,
         isOutsideCustomer: outside,
         commonOrderId,
@@ -332,22 +350,7 @@ router.post("/bulk", async (req, res) => {
       .populate("memberId", "name nameMr rollNumber roomOwnerName roomOwnerNameMr")
       .lean();
 
-    const serialized = populated.map((o) => {
-      const pricePerItem = Number(o?.snackId?.price || 0);
-      const totalPrice = pricePerItem * Number(o?.quantity || 0);
-      return {
-        ...o,
-        snackItem: o?.snackId?.name || "",
-        snackItemMr: o?.snackId?.nameMr || o?.snackId?.name || "",
-        pricePerItem,
-        totalPrice,
-        memberName: !outside ? o?.memberId?.name : undefined,
-        memberNameMr: !outside ? o?.memberId?.nameMr : undefined,
-        customerName: outside ? o?.customerName : undefined,
-        customerNameMr: outside ? o?.customerNameMr : undefined,
-        referenceId: o?.purchaseReference || String(o?._id || ""),
-      };
-    });
+    const serialized = populated.map((o) => toSerializedSnackOrder(o, outside));
 
     if (!outside && resolvedMemberId) {
       const monthStart = toMonthStart(orderDate);
@@ -380,6 +383,7 @@ router.put("/:id", async (req, res) => {
       snackId,
       snackProductId,
       snackItem, // legacy fallback (by name)
+      pricePerItem,
       quantity,
       date,
       isOutsideCustomer,
@@ -402,6 +406,26 @@ router.put("/:id", async (req, res) => {
     }
 
     if (resolvedSnackId) order.snackId = resolvedSnackId;
+    if (!resolvedSnackId && typeof snackItem !== "undefined") {
+      const manualSnack = String(snackItem || "").trim();
+      if (!manualSnack) {
+        return res.status(400).json({ message: "snackItem is required" });
+      }
+      order.snackId = undefined;
+      order.snackItemSnapshot = manualSnack;
+      order.snackItemMrSnapshot = manualSnack;
+      if (typeof pricePerItem !== "undefined") {
+        const p = Number(pricePerItem);
+        if (!Number.isFinite(p) || p < 0) {
+          return res.status(400).json({ message: "pricePerItem must be a valid non-negative number" });
+        }
+        order.pricePerItemSnapshot = p;
+      }
+    } else if (resolvedSnackId) {
+      order.snackItemSnapshot = "";
+      order.snackItemMrSnapshot = "";
+      order.pricePerItemSnapshot = null;
+    }
     order.isOutsideCustomer = outside;
 
     if (outside) {
@@ -504,7 +528,9 @@ router.put("/:id", async (req, res) => {
     if (hasBillingImpactChange) {
       // For normal orders, persist billed value as qty * current snack price.
       if (!order.billSplitRequestId) {
-        const snackPrice = Number(snackForStock?.price || 0);
+        const snackPrice = snackForStock
+          ? Number(snackForStock?.price || 0)
+          : Number(order.pricePerItemSnapshot || 0);
         order.chargedAmount = Number(order.quantity || 0) * snackPrice;
       }
     }
@@ -544,20 +570,7 @@ router.put("/:id", async (req, res) => {
       .populate("memberId", "name nameMr rollNumber roomOwnerName roomOwnerNameMr")
       .lean();
 
-    const pricePerItem = Number(populated?.snackId?.price || 0);
-    const totalPrice = pricePerItem * Number(populated?.quantity || 0);
-
-    res.json({
-      ...populated,
-      snackItem: populated?.snackId?.name || "",
-      snackItemMr: populated?.snackId?.nameMr || populated?.snackId?.name || "",
-      pricePerItem,
-      totalPrice,
-      memberName: !outside ? populated?.memberId?.name : undefined,
-      memberNameMr: !outside ? populated?.memberId?.nameMr : undefined,
-      customerName: outside ? populated?.customerName : undefined,
-      customerNameMr: outside ? populated?.customerNameMr : undefined,
-    });
+    res.json(toSerializedSnackOrder(populated, outside));
   } catch (error) {
     console.error("Update snack error:", error);
     res.status(500).json({ message: "Failed to update snack order" });

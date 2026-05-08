@@ -7,6 +7,7 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -19,14 +20,14 @@ import LanguageToggle from "../../components/LanguageToggle";
 
 const DASHBOARD_CARDS = [
   // Priority order requested:
-  // 1) Manage Members  2) Extra Snacks  3) Mess Expenses  4) Reports
+  // 1) Manage Members  2) Extra Snacks  3) Mess Expenses
   { id: "students", titleKey: "card_students", icon: "people" },
   { id: "snacks", titleKey: "card_snacks", icon: "fast-food" },
   { id: "expenses", titleKey: "card_expenses", icon: "wallet" },
+  { id: "payments", titleKey: "card_payments", icon: "card" },
   { id: "reports", titleKey: "card_reports", icon: "document-text" },
 
   // Remaining cards
-  { id: "payments", titleKey: "card_payments", icon: "card" },
   { id: "menu", titleKey: "card_menu", icon: "restaurant" },
   { id: "snackProducts", titleKey: "card_snack_products", icon: "pricetag" },
   { id: "leave", titleKey: "card_leave", icon: "calendar" },
@@ -86,6 +87,10 @@ const AdminDashboard = () => {
       setRefreshing(false);
     }
   }, [fetchPendingLeaveCount]);
+
+  const handleQrScannerPress = useCallback(() => {
+    Alert.alert("Feature Disabled", "Functionality is disabled.");
+  }, []);
 
   const handleCardPress = (cardId) => {
     if (DISABLED_DASHBOARD_CARDS.has(cardId)) return;
@@ -157,11 +162,11 @@ const AdminDashboard = () => {
             </Text>
           </View>
           <TouchableOpacity
-            style={styles.qrScannerButton}
-            onPress={() => router.push("/Admin/SnackQrScanner")}
+            style={[styles.qrScannerButton, styles.qrScannerButtonDisabled]}
+            onPress={handleQrScannerPress}
             activeOpacity={0.8}
           >
-            <Ionicons name="qr-code-outline" size={24} color="#111827" />
+            <Ionicons name="qr-code-outline" size={24} color="#9CA3AF" />
           </TouchableOpacity>
         </View>
 
@@ -288,6 +293,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#F3F4F6",
     alignItems: "center",
     justifyContent: "center",
+  },
+  qrScannerButtonDisabled: {
+    backgroundColor: "#E5E7EB",
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
   },
   grid: {
     flexDirection: "row",
