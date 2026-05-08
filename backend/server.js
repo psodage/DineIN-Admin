@@ -59,6 +59,7 @@ app.use("/api/pending-registrations", require("./routes/pendingRegistrationRoute
 app.use("/api/bill-splits", require("./routes/billSplitRoutes"));
 app.use("/api/snacks", require("./routes/snackRoutes"));
 app.use("/api/snack-products", require("./routes/snackProductRoutes"));
+app.use("/api/backups", require("./routes/backupRoutes"));
 
 const PORT = process.env.PORT || 5001;
 
