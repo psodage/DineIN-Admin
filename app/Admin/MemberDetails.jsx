@@ -93,14 +93,6 @@ export default function MemberDetails() {
   const [totalMonthlyDue, setTotalMonthlyDue] = useState(0);
   const dueRefreshTimerRef = useRef(null);
 
-  const scheduleDueRefresh = useCallback(() => {
-    if (dueRefreshTimerRef.current) clearTimeout(dueRefreshTimerRef.current);
-    dueRefreshTimerRef.current = setTimeout(() => {
-      fetchMonthlyDue();
-      fetchTotalMonthlyDue();
-    }, 700);
-  }, [fetchMonthlyDue, fetchTotalMonthlyDue]);
-
   const [form, setForm] = useState({
     name: "",
     roomOwnerName: "",
@@ -210,6 +202,14 @@ export default function MemberDetails() {
     }
   }, [memberIdValue]);
 
+  const scheduleDueRefresh = useCallback(() => {
+    if (dueRefreshTimerRef.current) clearTimeout(dueRefreshTimerRef.current);
+    dueRefreshTimerRef.current = setTimeout(() => {
+      fetchMonthlyDue();
+      fetchTotalMonthlyDue();
+    }, 700);
+  }, [fetchMonthlyDue, fetchTotalMonthlyDue]);
+
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       router.replace("/");
@@ -288,7 +288,12 @@ export default function MemberDetails() {
       setSaving(true);
       await api.put(`/api/members/${memberIdValue}`, payload);
       setIsEditing(false);
-      await fetchMemberDetails();
+      await Promise.all([
+        fetchMemberDetails(),
+        fetchLeaveCalendar(),
+        fetchMonthlyDue(),
+        fetchTotalMonthlyDue(),
+      ]);
       Alert.alert(
         language === "en" ? "Updated" : "अपडेट झाले",
         language === "en"
@@ -443,6 +448,12 @@ export default function MemberDetails() {
     fetchMonthlyDue,
     fetchTotalMonthlyDue,
   ]);
+
+  useEffect(() => {
+    return () => {
+      if (dueRefreshTimerRef.current) clearTimeout(dueRefreshTimerRef.current);
+    };
+  }, []);
 
   if (authLoading || !isAuthenticated || loading) {
     return (
