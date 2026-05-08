@@ -9,6 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "backup:mongo:gdrive": "npm run backup:mongo:gdrive --prefix backend",
     "run:member-monthly-due-daily": "npm run run:member-monthly-due-daily --prefix backend",
     "backfill:member-monthly-due": "npm run backfill:member-monthly-due --prefix backend",
     "recalc:member-monthly-due-apr1": "npm run recalc:member-monthly-due-apr1 --prefix backend",

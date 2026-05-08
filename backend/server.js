@@ -9,6 +9,7 @@ const { seedMealTypes } = require("./utils/seedMealTypes");
 const {
   startMemberMonthlyDueDailyScheduler,
 } = require("./jobs/memberMonthlyDueDailyJob");
+const { startMongoBackupDailyScheduler } = require("./jobs/mongoBackupJob");
 
 const app = express();
 
@@ -66,4 +67,5 @@ app.listen(PORT, () => {
   const hasEmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
   console.log(`Nodemailer (Gmail SMTP) configured: ${hasEmail ? "yes" : "no"}`);
   startMemberMonthlyDueDailyScheduler();
+  startMongoBackupDailyScheduler();
 });

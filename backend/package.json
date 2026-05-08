@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "backup:mongo:gdrive": "node scripts/backupMongoToDrive.js",
     "backfill:member-monthly-due": "node scripts/backfillMemberMonthlyDue.js",
     "backfill:member-monthly-due:month": "node scripts/backfillMemberMonthlyDueForMonth.js",
     "backfill:member-monthly-due:months": "node scripts/backfillMemberMonthlyDueForMonths.js",
