@@ -1,47 +1,49 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# Dependencies
+frontend/node_modules/
+backend/node_modules/
 
-# dependencies
-node_modules/
+# Expo / Metro (frontend)
+frontend/.expo/
+backend/.expo/
+frontend/dist/
+frontend/web-build/
+frontend/expo-env.d.ts
 
-# Expo
-.expo/
-dist/
-web-build/
-expo-env.d.ts
+# Native (generated via prebuild in frontend/)
+frontend/android/
+frontend/ios/
+frontend/.kotlin/
 
-# Native
-.kotlin/
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# OS
+.DS_Store
+*.pem
+
+# Environment (never commit secrets)
+.env
+.env*.local
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# TypeScript
+*.tsbuildinfo
+
+# IDE / tooling
+app-example
+.metro-health-check*
+
+# Signing / credentials
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
-
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
-# macOS
-.DS_Store
-*.pem
-
-# local env files
-.env*.local
-.env
-backend/.env
-backend/.env.*
-!backend/.env.example
-
-# typescript
-*.tsbuildinfo
-
-app-example
-
-# generated native folders
-/ios
-/android

@@ -1,4 +1,4 @@
-const DEFAULT_PORT = 5000;
+const DEFAULT_PORT = 5001;
 
 // Use EXPO_PUBLIC_API_BASE_URL from .env (set manually)
 // Example: EXPO_PUBLIC_API_BASE_URL=https://your-backend-url

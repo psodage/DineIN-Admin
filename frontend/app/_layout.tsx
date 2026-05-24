@@ -1,13 +1,14 @@
+import "react-native-gesture-handler";
+import "react-native-reanimated";
 import { Stack } from "expo-router";
-import { TextInput } from "react-native";
 import { LanguageProvider } from "../LanguageContext";
 import { AuthProvider } from "../lib/AuthContext";
 import AppSecurityWrapper from "../components/AppSecurityWrapper";
-
-TextInput.defaultProps = TextInput.defaultProps || {};
-TextInput.defaultProps.placeholderTextColor = "#6B7280";
+import { useOTAUpdates } from "../hooks/useOTAUpdates";
 
 export default function RootLayout() {
+  useOTAUpdates();
+
   return (
     <AuthProvider>
       <LanguageProvider>
