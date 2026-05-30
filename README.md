@@ -31,7 +31,7 @@ npx expo start
 Copy `frontend/.env.example` to `frontend/.env` and set:
 
 ```env
-EXPO_PUBLIC_API_BASE_URL=http://localhost:5001
+EXPO_PUBLIC_API_BASE_URL=http://localhost:5000
 ```
 
 For production builds, `EXPO_PUBLIC_API_BASE_URL` is also set in `frontend/eas.json` per profile.
@@ -70,7 +70,7 @@ npm run dev
 
 The mobile app reads `EXPO_PUBLIC_API_BASE_URL` (see `frontend/config.js`). Point it at your backend origin without a trailing `/api` — screens append `/api/...` themselves.
 
-Local default: `http://localhost:5001` (backend `PORT` in `.env`, default 5001).
+Local default: `http://localhost:5000` (backend `PORT` in `.env`, default 5000).
 
 ## Maintenance scripts
 

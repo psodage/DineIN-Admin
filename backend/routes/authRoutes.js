@@ -12,11 +12,25 @@ const router = express.Router();
 
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
-  if (secret) return secret;
+  if (secret) return String(secret).replace(/^["']|["']$/g, "");
   if (process.env.NODE_ENV === "production") {
     throw new Error("JWT_SECRET is required in production");
   }
   return "secretkey";
+}
+
+async function verifyPassword(input, stored) {
+  const inputStr = String(input || "");
+  const storedStr = String(stored || "");
+  const looksHashed =
+    storedStr.startsWith("$2a$") ||
+    storedStr.startsWith("$2b$") ||
+    storedStr.startsWith("$2y$");
+
+  if (looksHashed) {
+    return bcrypt.compare(inputStr, storedStr);
+  }
+  return storedStr.trim() === inputStr.trim();
 }
 
 /**
@@ -218,16 +232,20 @@ router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const normalizedEmail = String(email || "").toLowerCase().trim();
-    const user = await User.findOne({
-      $expr: { $eq: [{ $toLower: "$email" }, normalizedEmail] },
-    });
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Email and password are required" });
+    }
+
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail, role: "admin" });
 
     if (!user) {
       return res.status(400).json({ message: "User not found" });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await verifyPassword(password, user.password);
 
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });

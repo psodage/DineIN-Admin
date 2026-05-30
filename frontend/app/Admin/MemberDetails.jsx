@@ -18,6 +18,15 @@ import api from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
 import { displayMealPlanMr, displayStatusMr } from "../../lib/memberLabelsMr";
+import {
+  dateToYearMonth,
+  getMaxSelectableYearMonth,
+  getPolicyMinYearMonth,
+  isBeforeJuneYearMonth,
+  shiftMemberMonthDate,
+  snapToJuneYearMonth,
+  yearMonthToDate,
+} from "../../lib/monthNavigation";
 
 const formatDate = (value, fallback = "-") => {
   if (!value) return fallback;
@@ -59,14 +68,6 @@ const toSafeAmount = (...values) => {
 
 const isValidMonthDate = (date) =>
   date instanceof Date && !Number.isNaN(date.getTime());
-
-const shiftMonthSafe = (baseMonth, offset, minMonth, maxMonth) => {
-  if (!isValidMonthDate(baseMonth)) return maxMonth || new Date();
-  const moved = new Date(baseMonth.getFullYear(), baseMonth.getMonth() + offset, 1);
-  if (isValidMonthDate(minMonth) && moved < minMonth) return minMonth;
-  if (isValidMonthDate(maxMonth) && moved > maxMonth) return maxMonth;
-  return moved;
-};
 
 const buildCalendarCells = (monthDate) => {
   const year = monthDate.getFullYear();
@@ -122,10 +123,16 @@ export default function MemberDetails() {
   const monthParam = useMemo(() => getMonthParam(monthDate), [monthDate]);
   const calendarCells = useMemo(() => buildCalendarCells(monthDate), [monthDate]);
   const leaveDateSet = useMemo(() => new Set(leaveDates), [leaveDates]);
-  const minMonth = useMemo(
-    () => normalizeMonthDate(member?.joiningDate || new Date()),
-    [member?.joiningDate]
+  const policyMinMonth = useMemo(
+    () => normalizeMonthDate(yearMonthToDate(getPolicyMinYearMonth())),
+    []
   );
+  const minMonth = useMemo(() => {
+    const joinMin = normalizeMonthDate(member?.joiningDate || new Date());
+    if (!joinMin) return policyMinMonth;
+    if (!policyMinMonth) return joinMin;
+    return joinMin > policyMinMonth ? joinMin : policyMinMonth;
+  }, [member?.joiningDate, policyMinMonth]);
   const maxMonth = useMemo(() => normalizeMonthDate(new Date()), []);
 
   const fetchMemberDetails = useCallback(async () => {
@@ -257,12 +264,20 @@ export default function MemberDetails() {
       setMonthDate(maxMonth || new Date());
       return;
     }
-    if (isValidMonthDate(minMonth) && monthDate < minMonth) {
-      setMonthDate(minMonth);
-      return;
+    const currentYm = getMaxSelectableYearMonth();
+    let ym = dateToYearMonth(monthDate);
+    if (ym !== currentYm && isBeforeJuneYearMonth(ym)) {
+      ym = snapToJuneYearMonth(ym);
     }
-    if (isValidMonthDate(maxMonth) && monthDate > maxMonth) {
-      setMonthDate(maxMonth);
+    let next = yearMonthToDate(ym);
+    if (isValidMonthDate(minMonth) && next < minMonth) {
+      next = minMonth;
+    }
+    if (isValidMonthDate(maxMonth) && next > maxMonth) {
+      next = maxMonth;
+    }
+    if (next.getTime() !== monthDate.getTime()) {
+      setMonthDate(next);
     }
   }, [monthDate, minMonth, maxMonth]);
 
@@ -693,7 +708,9 @@ export default function MemberDetails() {
             <View style={styles.monthNav}>
               <TouchableOpacity
                 style={[styles.monthButton, !canGoPrev && styles.monthButtonDisabled]}
-                onPress={() => setMonthDate((prev) => shiftMonthSafe(prev, -1, minMonth, maxMonth))}
+                onPress={() =>
+                  setMonthDate((prev) => shiftMemberMonthDate(prev, -1, minMonth, maxMonth))
+                }
                 disabled={!canGoPrev}
               >
                 <Ionicons
@@ -705,7 +722,9 @@ export default function MemberDetails() {
               <Text style={styles.monthText}>{monthLabel}</Text>
               <TouchableOpacity
                 style={[styles.monthButton, !canGoNext && styles.monthButtonDisabled]}
-                onPress={() => setMonthDate((prev) => shiftMonthSafe(prev, 1, minMonth, maxMonth))}
+                onPress={() =>
+                  setMonthDate((prev) => shiftMemberMonthDate(prev, 1, minMonth, maxMonth))
+                }
                 disabled={!canGoNext}
               >
                 <Ionicons

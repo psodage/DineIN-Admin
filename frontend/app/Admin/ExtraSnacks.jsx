@@ -22,6 +22,14 @@ import { useLanguage } from "../../LanguageContext";
 import LanguageToggle from "../../components/LanguageToggle";
 import { getMonthLabel } from "../../lib/monthLabels";
 import { fetchMemberDirectory } from "../../lib/memberDirectory";
+import {
+  clampYearMonthToSelectableWindow,
+  combineMinYearMonth,
+  getCurrentYearMonth,
+  getMaxSelectableYearMonth,
+  stepNextYearMonth,
+  stepPrevYearMonth,
+} from "../../lib/monthNavigation";
 
 const formatDisplayDate = (d) => {
   const date = d instanceof Date ? d : new Date(d);
@@ -56,12 +64,6 @@ const resolveDisplayTotal = (order) => {
   return qty * price;
 };
 
-const getSelectedMonth = (monthOffset = 0) => {
-  const d = new Date();
-  d.setMonth(d.getMonth() + monthOffset);
-  return d.getFullYear() * 12 + d.getMonth();
-};
-
 const INITIAL_FORM = {
   customerName: "",
   customerType: "outside",
@@ -86,7 +88,9 @@ export default function ExtraSnacks() {
   const [members, setMembers] = useState([]);
   const [formVisible, setFormVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(getSelectedMonth());
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    clampYearMonthToSelectableWindow(getCurrentYearMonth())
+  );
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
   const [errors, setErrors] = useState({});
@@ -174,8 +178,15 @@ export default function ExtraSnacks() {
       return d.getFullYear() * 12 + d.getMonth();
     })
     .filter((ym) => !Number.isNaN(ym));
-  const minSnackMonth =
-    snackMonths.length > 0 ? Math.min(...snackMonths) : getSelectedMonth(0);
+  const minSnackMonth = combineMinYearMonth(
+    snackMonths.length > 0 ? Math.min(...snackMonths) : getCurrentYearMonth(0)
+  );
+
+  useEffect(() => {
+    setSelectedMonth((m) =>
+      clampYearMonthToSelectableWindow(m, minSnackMonth, getMaxSelectableYearMonth())
+    );
+  }, [minSnackMonth, snacks.length]);
 
   const monthSnacks = allSnacks.filter((s) => {
     const d = new Date(s.date);
@@ -689,25 +700,14 @@ export default function ExtraSnacks() {
         <View style={styles.monthNav}>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const next = m - 1;
-                return next < minSnackMonth ? minSnackMonth : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepPrevYearMonth(m, minSnackMonth))}
           >
             <Ionicons name="chevron-back" size={24} color="#111827" />
           </TouchableOpacity>
           <Text style={styles.monthLabel}>{getMonthLabel(selectedMonth, language)}</Text>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const current = getSelectedMonth(0);
-                const next = m + 1;
-                return next > current ? current : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepNextYearMonth(m))}
           >
             <Ionicons name="chevron-forward" size={24} color="#111827" />
           </TouchableOpacity>

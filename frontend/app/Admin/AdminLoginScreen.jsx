@@ -20,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 export default function AdminLoginScreen() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { login } = useAuth();
+  const { login, loadAuth } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -37,17 +37,23 @@ export default function AdminLoginScreen() {
 
       const res = await axios.post(
         `${API_BASE_URL}/api/auth/login`,
-        { email, password }
+        { email, password },
+        { timeout: 15000 }
       );
 
       await login(res.data.token, res.data.user);
+      await loadAuth();
+      router.replace("/Admin/AdminDashboard");
       Alert.alert(t("alert_success"), t("login_success"));
-      // Defer navigation so AuthProvider commits token before guarded screens mount
-      // (otherwise dashboard can see stale isAuthenticated and redirect home).
-      setTimeout(() => router.replace("/Admin/AdminDashboard"), 0);
     } catch (err) {
-      const msg =
-        err?.response?.data?.message || t("login_failed_generic");
+      let msg = err?.response?.data?.message;
+      if (!msg && !err?.response) {
+        msg =
+          err?.code === "ECONNABORTED"
+            ? `Request timed out.\n\nBackend: ${API_BASE_URL}\n\nEnsure npm run dev is running in backend/ and Windows Firewall allows port ${new URL(API_BASE_URL).port || "5000"}.`
+            : `Cannot reach the server at:\n${API_BASE_URL}\n\n• Phone and PC on the same Wi‑Fi (not mobile data)\n• frontend/.env matches the PC IP from backend logs (Network: http://…)\n• Allow Node/port 5000 in Windows Firewall\n• Restart Expo after .env changes: npx expo start -c`;
+      }
+      if (!msg) msg = t("login_failed_generic");
       Alert.alert(t("alert_error"), msg);
     } finally {
       setLoading(false);

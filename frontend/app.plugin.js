@@ -17,6 +17,13 @@ module.exports = function withDineINAndroidSecurity(config) {
 
     mainActivity.$["android:resizeableActivity"] = "false";
 
+    const application = AndroidConfig.Manifest.getMainApplicationOrThrow(manifest);
+    if (!application.$) {
+      application.$ = {};
+    }
+    // Allow HTTP to local/dev API (EXPO_PUBLIC_API_BASE_URL) on physical devices.
+    application.$["android:usesCleartextTraffic"] = "true";
+
     return config;
   });
 };

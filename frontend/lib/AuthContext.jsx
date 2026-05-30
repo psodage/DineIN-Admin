@@ -72,8 +72,8 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      // Best-effort server-side logout (clears activeSessionToken).
-      if (token) {
+      // Best-effort server-side logout (clears activeSessionToken for members).
+      if (token && user?.role === "member") {
         await api.post("/api/auth/member-logout");
       }
     } catch (_) {

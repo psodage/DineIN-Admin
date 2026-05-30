@@ -20,12 +20,14 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system";
 import { getMonthLabel } from "../../lib/monthLabels";
-
-const getSelectedMonth = (monthOffset = 0) => {
-  const d = new Date();
-  d.setMonth(d.getMonth() + monthOffset);
-  return d.getFullYear() * 12 + d.getMonth();
-};
+import {
+  clampYearMonthToSelectableWindow,
+  combineMinYearMonth,
+  getCurrentYearMonth,
+  getMaxSelectableYearMonth,
+  stepNextYearMonth,
+  stepPrevYearMonth,
+} from "../../lib/monthNavigation";
 
 const formatDisplayDate = (d, language = "en") => {
   const date = d instanceof Date ? d : new Date(d);
@@ -323,7 +325,9 @@ export default function Reports() {
   const { loading: authLoading, isAuthenticated } = useAuth();
   const { language } = useLanguage();
   const [loading, setLoading] = useState(true);
-  const [selectedMonth, setSelectedMonth] = useState(getSelectedMonth());
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    clampYearMonthToSelectableWindow(getCurrentYearMonth())
+  );
   const [payments, setPayments] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [snacks, setSnacks] = useState([]);
@@ -393,8 +397,15 @@ export default function Reports() {
       return d.getFullYear() * 12 + d.getMonth();
     }),
   ].filter((ym) => ym != null && !Number.isNaN(ym));
-  const minReportMonth =
-    allMonths.length > 0 ? Math.min(...allMonths) : getSelectedMonth(0);
+  const minReportMonth = combineMinYearMonth(
+    allMonths.length > 0 ? Math.min(...allMonths) : getCurrentYearMonth(0)
+  );
+
+  useEffect(() => {
+    setSelectedMonth((m) =>
+      clampYearMonthToSelectableWindow(m, minReportMonth, getMaxSelectableYearMonth())
+    );
+  }, [minReportMonth, payments.length, expenses.length, snacks.length]);
 
   const monthPayments = filterPaymentsByMonth(payments, selectedMonth);
   const monthExpenses = filterByMonth(expenses, selectedMonth);
@@ -749,12 +760,7 @@ export default function Reports() {
         <View style={styles.monthSelector}>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const next = m - 1;
-                return next < minReportMonth ? minReportMonth : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepPrevYearMonth(m, minReportMonth))}
           >
             <Ionicons name="chevron-back" size={24} color="#111827" />
           </TouchableOpacity>
@@ -763,13 +769,7 @@ export default function Reports() {
           </Text>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const current = getSelectedMonth(0);
-                const next = m + 1;
-                return next > current ? current : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepNextYearMonth(m))}
           >
             <Ionicons name="chevron-forward" size={24} color="#111827" />
           </TouchableOpacity>

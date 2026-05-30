@@ -18,6 +18,14 @@ import { useRouter } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import api from "../../lib/api";
 import { useLanguage } from "../../LanguageContext";
+import {
+  clampYearMonthToSelectableWindow,
+  combineMinYearMonth,
+  getCurrentYearMonth,
+  getMaxSelectableYearMonth,
+  stepNextYearMonth,
+  stepPrevYearMonth,
+} from "../../lib/monthNavigation";
 
 const CATEGORIES = [
   "Vegetables",
@@ -71,12 +79,6 @@ const formatCurrency = (amount) => {
   return `₹${Number(amount).toLocaleString("en-IN")}`;
 };
 
-const getSelectedMonth = (monthOffset = 0) => {
-  const d = new Date();
-  d.setMonth(d.getMonth() + monthOffset);
-  return d.getFullYear() * 12 + d.getMonth();
-};
-
 const getMonthLabel = (yearMonth, lang = "en") => {
   const year = Math.floor(yearMonth / 12);
   const month = yearMonth % 12;
@@ -91,7 +93,9 @@ export default function MessExpenses() {
   const [loading, setLoading] = useState(true);
   const [formVisible, setFormVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(getSelectedMonth());
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    clampYearMonthToSelectableWindow(getCurrentYearMonth())
+  );
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -263,8 +267,15 @@ export default function MessExpenses() {
       return d.getFullYear() * 12 + d.getMonth();
     })
     .filter((ym) => !Number.isNaN(ym));
-  const minExpenseMonth =
-    allExpenseMonths.length > 0 ? Math.min(...allExpenseMonths) : getSelectedMonth(0);
+  const minExpenseMonth = combineMinYearMonth(
+    allExpenseMonths.length > 0 ? Math.min(...allExpenseMonths) : getCurrentYearMonth(0)
+  );
+
+  useEffect(() => {
+    setSelectedMonth((m) =>
+      clampYearMonthToSelectableWindow(m, minExpenseMonth, getMaxSelectableYearMonth())
+    );
+  }, [minExpenseMonth, expenses.length]);
 
   const monthExpenses = expenses.filter((e) => {
     const d = new Date(e.date);
@@ -354,12 +365,7 @@ export default function MessExpenses() {
         <View style={styles.monthNav}>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const next = m - 1;
-                return next < minExpenseMonth ? minExpenseMonth : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepPrevYearMonth(m, minExpenseMonth))}
           >
             <Ionicons name="chevron-back" size={24} color="#111827" />
           </TouchableOpacity>
@@ -368,13 +374,7 @@ export default function MessExpenses() {
           </Text>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const current = getSelectedMonth(0);
-                const next = m + 1;
-                return next > current ? current : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepNextYearMonth(m))}
           >
             <Ionicons name="chevron-forward" size={24} color="#111827" />
           </TouchableOpacity>

@@ -67,10 +67,11 @@ const AdminDashboard = () => {
   }, []);
 
   useEffect(() => {
-    if (!loading && !isAuthenticated) {
-      router.replace("/");
+    if (loading) return;
+    if (!isAuthenticated) {
+      router.replace("/Admin/AdminLoginScreen");
     }
-  }, [loading, isAuthenticated]);
+  }, [loading, isAuthenticated, router]);
 
   useFocusEffect(
     useCallback(() => {

@@ -101,6 +101,8 @@ module.exports = {
     },
     extra: {
       router: {},
+      /** Runtime fallback for API origin (see config.js). */
+      apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || null,
       eas: {
         projectId: EAS_PROJECT_ID,
       },

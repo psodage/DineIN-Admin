@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "expose": "npx --yes cloudflared tunnel --url http://127.0.0.1:5000",
     "backup:mongo:gdrive": "node scripts/backupMongoToDrive.js",
     "restore:mongo:gdrive": "node scripts/restoreMongoFromDrive.js",
     "backfill:member-monthly-due": "node scripts/backfillMemberMonthlyDue.js",

@@ -19,11 +19,13 @@ export default function Index() {
     user: AuthUser | null;
   };
   useEffect(() => {
-    if (!loading) {
-      router.replace(
-        (isAuthenticated ? "/Admin/AdminDashboard" : "/Admin/AdminLoginScreen") as any
-      );
-    }
+    if (loading) return;
+    const isAdmin =
+      isAuthenticated &&
+      (!user?.role || String(user.role).toLowerCase() === "admin");
+    router.replace(
+      (isAdmin ? "/Admin/AdminDashboard" : "/Admin/AdminLoginScreen") as any
+    );
   }, [loading, isAuthenticated, user, router]);
 
   return (

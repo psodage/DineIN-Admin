@@ -1,4 +1,5 @@
 const path = require("path");
+const os = require("os");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 const express = require("express");
 const cors = require("cors");
@@ -61,10 +62,33 @@ app.use("/api/snacks", require("./routes/snackRoutes"));
 app.use("/api/snack-products", require("./routes/snackProductRoutes"));
 app.use("/api/backups", require("./routes/backupRoutes"));
 
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+/** IPv4 LAN addresses (for logs / mobile dev); bind stays 0.0.0.0 to accept all interfaces. */
+function getLanIPv4Addresses() {
+  const nets = os.networkInterfaces();
+  const ips = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        ips.push(net.address);
+      }
+    }
+  }
+  return [...new Set(ips)];
+}
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on port ${PORT} (all interfaces)`);
+  console.log(`  Local:   http://127.0.0.1:${PORT}`);
+  const lanIps = getLanIPv4Addresses();
+  if (lanIps.length) {
+    for (const ip of lanIps) {
+      console.log(`  Network: http://${ip}:${PORT}`);
+    }
+  } else {
+    console.log("  Network: (no LAN IPv4 detected — use 127.0.0.1 on this machine)");
+  }
   const hasEmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
   console.log(`Nodemailer (Gmail SMTP) configured: ${hasEmail ? "yes" : "no"}`);
   startMemberMonthlyDueDailyScheduler();

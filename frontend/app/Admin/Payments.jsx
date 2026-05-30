@@ -23,12 +23,14 @@ import { useAuth } from "../../lib/AuthContext";
 import { useLanguage } from "../../LanguageContext";
 import { getMonthLabel } from "../../lib/monthLabels";
 import { fetchMemberDirectory } from "../../lib/memberDirectory";
-
-const getSelectedMonth = (monthOffset = 0) => {
-  const d = new Date();
-  d.setMonth(d.getMonth() + monthOffset);
-  return d.getFullYear() * 12 + d.getMonth();
-};
+import {
+  clampYearMonthToSelectableWindow,
+  combineMinYearMonth,
+  getCurrentYearMonth,
+  getMaxSelectableYearMonth,
+  stepNextYearMonth,
+  stepPrevYearMonth,
+} from "../../lib/monthNavigation";
 
 const formatCurrency = (amount) =>
   `₹${Number(amount || 0).toLocaleString("en-IN")}`;
@@ -69,7 +71,9 @@ const Payments = () => {
   const { language } = useLanguage();
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedMonth, setSelectedMonth] = useState(getSelectedMonth());
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    clampYearMonthToSelectableWindow(getCurrentYearMonth())
+  );
   const [members, setMembers] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
@@ -231,11 +235,20 @@ const Payments = () => {
   // Keep navigation usable even if there are no payment records yet.
   // Otherwise earliestPaymentMonth is null and the month back button gets stuck at current month.
   const earliestSelectableMonth = useMemo(() => {
-    const current = getSelectedMonth(0);
-    const twoYearsBack = getSelectedMonth(-24);
-    if (earliestPaymentMonth == null) return twoYearsBack;
-    return Math.min(earliestPaymentMonth, current);
+    const current = getCurrentYearMonth(0);
+    const twoYearsBack = getCurrentYearMonth(-24);
+    const dataEarliest =
+      earliestPaymentMonth == null
+        ? twoYearsBack
+        : Math.min(earliestPaymentMonth, current);
+    return combineMinYearMonth(dataEarliest);
   }, [earliestPaymentMonth]);
+
+  useEffect(() => {
+    setSelectedMonth((m) =>
+      clampYearMonthToSelectableWindow(m, earliestSelectableMonth, getMaxSelectableYearMonth())
+    );
+  }, [earliestSelectableMonth]);
 
   const billByMemberId = useMemo(() => {
     const map = new Map();
@@ -741,10 +754,7 @@ const Payments = () => {
           <TouchableOpacity
             style={styles.monthNavButton}
             onPress={() =>
-              setSelectedMonth((m) => {
-                const next = m - 1;
-                return next < earliestSelectableMonth ? earliestSelectableMonth : next;
-              })
+              setSelectedMonth((m) => stepPrevYearMonth(m, earliestSelectableMonth))
             }
           >
             <Ionicons name="chevron-back" size={24} color="#111827" />
@@ -752,13 +762,7 @@ const Payments = () => {
           <Text style={styles.monthLabel}>{getMonthLabel(selectedMonth, language)}</Text>
           <TouchableOpacity
             style={styles.monthNavButton}
-            onPress={() =>
-              setSelectedMonth((m) => {
-                const current = getSelectedMonth(0);
-                const next = m + 1;
-                return next > current ? current : next;
-              })
-            }
+            onPress={() => setSelectedMonth((m) => stepNextYearMonth(m))}
           >
             <Ionicons name="chevron-forward" size={24} color="#111827" />
           </TouchableOpacity>
