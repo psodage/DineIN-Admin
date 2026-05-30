@@ -25,8 +25,8 @@ const enableUpdates =
 /** @type {import('expo/config').ExpoConfig} */
 module.exports = {
   expo: {
-    name: "DineIN",
-    slug: "DineIN",
+    name: "DineIN Admin",
+    slug: "DineIN Admin",
     version: "1.0.0",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
